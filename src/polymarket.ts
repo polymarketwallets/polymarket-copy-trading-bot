@@ -26,8 +26,13 @@ export interface Market {
 
 export interface OrderOutcome {
   orderId: string;
-  /** filled = got shares (possibly fewer than asked for a FAK); none = nothing matched; failed = rejected */
-  status: 'filled' | 'none' | 'failed';
+  /**
+   * filled  = got shares (possibly fewer than asked for a FAK)
+   * none    = the exchange took the order and matched nothing
+   * failed  = nothing was sent, or the exchange rejected it outright: no fill is possible
+   * unknown = sent, but no usable answer came back (timeout, dropped connection): it may have filled
+   */
+  status: 'filled' | 'none' | 'failed' | 'unknown';
   shares: bigint;
   /** USDC paid (BUY) or received (SELL), fees not deducted */
   usdc: bigint;
@@ -40,7 +45,7 @@ export interface OrderOutcome {
   recheck?: boolean;
 }
 
-interface TradeFill { shares: bigint; usdc: bigint; feeUsdc: bigint; feeShares: bigint }
+export interface TradeFill { shares: bigint; usdc: bigint; feeUsdc: bigint; feeShares: bigint; orderIds: string[] }
 
 const ZERO_FILL = /no orders found|couldn't be fully filled|fully filled or killed/i;
 
@@ -161,12 +166,17 @@ export class PolymarketGateway {
     const size = roundBuyShares(shares, price);
     if (size <= 0n) return this.failed('size_zero_after_rounding');
     const since = Date.now() - 30_000;
+    let signed;
+    try {
+      signed = await clob.createOrder({ tokenID: tokenId, price: fromMicro(price), size: fromMicro(size), side: Side.BUY });
+    } catch (e) {
+      return this.failed(`sign_error: ${(e as Error).message}`.slice(0, 300)); // nothing left this machine
+    }
     let resp: any;
     try {
-      const signed = await clob.createOrder({ tokenID: tokenId, price: fromMicro(price), size: fromMicro(size), side: Side.BUY });
       resp = await clob.postOrder(signed, OrderType.FOK);
     } catch (e) {
-      return this.failed(`sdk_error: ${(e as Error).message}`.slice(0, 300));
+      return this.unknown(e);
     }
     return this.settle(resp, 'buy', tokenId, conditionId, since, { shares: size, price });
   }
@@ -181,21 +191,27 @@ export class PolymarketGateway {
     const size = roundSellShares(shares);
     if (size <= 0n) return this.failed('size_zero_after_rounding');
     const since = Date.now() - 30_000;
+    let signed;
+    try {
+      signed = await clob.createMarketOrder({ tokenID: tokenId, price: fromMicro(price), amount: fromMicro(size), side: Side.SELL, orderType: OrderType.FAK });
+    } catch (e) {
+      return this.failed(`sign_error: ${(e as Error).message}`.slice(0, 300));
+    }
     let resp: any;
     try {
-      resp = await clob.createAndPostMarketOrder(
-        { tokenID: tokenId, price: fromMicro(price), amount: fromMicro(size), side: Side.SELL },
-        undefined,
-        OrderType.FAK,
-      );
+      resp = await clob.postOrder(signed, OrderType.FAK);
     } catch (e) {
-      return this.failed(`sdk_error: ${(e as Error).message}`.slice(0, 300));
+      return this.unknown(e);
     }
     return this.settle(resp, 'sell', tokenId, conditionId, since, { shares: size, price });
   }
 
   private failed(reason: string): OrderOutcome {
     return { orderId: '', status: 'failed', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason };
+  }
+
+  private unknown(e: unknown): OrderOutcome {
+    return { orderId: '', status: 'unknown', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: `post_error: ${(e as Error)?.message ?? String(e)}`.slice(0, 300), recheck: true };
   }
 
   /**
@@ -216,7 +232,7 @@ export class PolymarketGateway {
     }
     if (err) this.log.warn('order response carried an error with an order id; reading fills', { orderId, err: err.slice(0, 200) });
 
-    let fill = await this.fillsOf(orderId, conditionId, since).catch(() => null);
+    let fill: TradeFill | null = await this.fillsOf(orderId, conditionId, since).catch(() => null);
     if (!fill || fill.shares === 0n) {
       // trade history can lag the match; take the response's own amounts
       const making = Number.parseFloat(resp?.makingAmount ?? '0');
@@ -224,9 +240,9 @@ export class PolymarketGateway {
       if (making > 0 && taking > 0) {
         const shares = toMicro(side === 'buy' ? taking : making);
         const usdc = toMicro(side === 'buy' ? making : taking);
-        fill = { shares, usdc, feeUsdc: 0n, feeShares: 0n };
+        fill = { shares, usdc, feeUsdc: 0n, feeShares: 0n, orderIds: [orderId] };
       } else if (String(resp?.status ?? '').toLowerCase() === 'matched') {
-        fill = { shares: asked.shares, usdc: (asked.shares * asked.price) / UNIT, feeUsdc: 0n, feeShares: 0n };
+        fill = { shares: asked.shares, usdc: (asked.shares * asked.price) / UNIT, feeUsdc: 0n, feeShares: 0n, orderIds: [orderId] };
       }
     }
     if (!fill || fill.shares === 0n) {
@@ -237,18 +253,29 @@ export class PolymarketGateway {
   }
 
   /**
-   * Our fills for one order. The CLOB cannot filter trades by order id, so scope by market + time
-   * and match taker_order_id here (a lookup by `id` silently returns nothing — the trade id is not
-   * the order id). All pages: other volume in a busy market can push ours off the first one.
-   * BUY taker fees are charged in shares: fee = size × fee_rate_bps / 10000, converted at fill price.
+   * Our taker fills for one order — or, when the order id never came back (`orderId` null), the taker
+   * fills in this token and side since `sinceMs` that are not attributed to any order we already booked.
+   *
+   * The CLOB cannot filter trades by order id, so scope by market + time and match taker_order_id here
+   * (a lookup by `id` silently returns nothing — the trade id is not the order id). All pages: other
+   * volume in a busy market can push ours off the first one. BUY taker fees are charged in shares:
+   * fee = size × fee_rate_bps / 10000, converted at the fill price.
    */
-  async fillsOf(orderId: string, conditionId: string, sinceMs: number): Promise<TradeFill> {
+  async fillsOf(orderId: string | null, conditionId: string, sinceMs: number, match?: { tokenId: string; side: 'buy' | 'sell'; isBooked: (id: string) => boolean }): Promise<TradeFill> {
     const clob = this.requireClob();
     const trades = await clob.getTrades({ market: conditionId, after: String(Math.floor(sinceMs / 1000)) }, false);
-    const out: TradeFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n };
-    const id = orderId.toLowerCase();
+    const out: TradeFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [] };
+    const id = orderId?.toLowerCase() ?? null;
     for (const t of Array.isArray(trades) ? trades : []) {
-      if (String(t.taker_order_id ?? '').toLowerCase() !== id) continue;
+      const taker = String(t.taker_order_id ?? '').toLowerCase();
+      if (id) {
+        if (taker !== id) continue;
+      } else {
+        if (!match || !taker || match.isBooked(taker)) continue;
+        if (String(t.trader_side ?? '').toUpperCase() !== 'TAKER') continue;
+        if (String(t.asset_id) !== match.tokenId || String(t.side ?? '').toLowerCase() !== match.side) continue;
+        if (tradeTimeMs(t.match_time) < sinceMs) continue;
+      }
       const size = toMicro(t.size);
       const price = toMicro(t.price);
       const feeShares = (size * BigInt(t.fee_rate_bps || '0')) / 10_000n;
@@ -256,6 +283,7 @@ export class PolymarketGateway {
       out.usdc += (size * price) / UNIT;
       out.feeShares += feeShares;
       out.feeUsdc += (feeShares * price) / UNIT;
+      if (!out.orderIds.includes(taker)) out.orderIds.push(taker);
     }
     return out;
   }
@@ -273,4 +301,13 @@ export class PolymarketGateway {
     if (r?.error || r?.errorMsg) throw new Error(String(r.errorMsg || r.error));
     return r?.balance ? (String(r.balance).includes('.') ? toMicro(r.balance) : BigInt(r.balance)) : 0n;
   }
+}
+
+/** match_time comes as unix seconds (string or number) or an ISO string */
+export function tradeTimeMs(v: unknown): number {
+  if (typeof v === 'number') return v < 1e12 ? v * 1000 : v;
+  const str = String(v ?? '');
+  if (/^\d+(\.\d+)?$/.test(str)) { const n = Number(str); return n < 1e12 ? n * 1000 : n; }
+  const t = Date.parse(str);
+  return Number.isFinite(t) ? t : 0;
 }

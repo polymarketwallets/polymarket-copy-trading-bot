@@ -103,8 +103,14 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HANDLE = /^[0-9A-Z]{12}$/;
 
 function num(v: unknown, path: string, min: number, max: number): number {
-  const n = typeof v === 'string' ? Number(v) : v;
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
   if (typeof n !== 'number' || !Number.isFinite(n) || n < min || n > max) throw new Error(`${path} must be a number in [${min}, ${max}], got ${JSON.stringify(v)}`);
+  return n;
+}
+
+function int(v: unknown, path: string, min: number, max: number): number {
+  const n = num(v, path, min, max);
+  if (!Number.isInteger(n)) throw new Error(`${path} must be a whole number, got ${JSON.stringify(v)}`);
   return n;
 }
 
@@ -125,19 +131,20 @@ export function buildConfig(raw: Record<string, any>): Config {
   if (c.mode !== 'dry-run' && c.mode !== 'live') throw new Error(`mode must be dry-run or live, got ${JSON.stringify(c.mode)}`);
   if (!c.pmwallets.apiKey || !/^pmw_/.test(c.pmwallets.apiKey)) throw new Error('pmwallets.apiKey is required (pmw_…, from https://pmwallets.com/keys)');
 
-  num(copy.orderSizeUsdc, 'copy.orderSizeUsdc', 1, 1_000_000);
-  num(copy.maxBuysPerOutcome, 'copy.maxBuysPerOutcome', 1, 1000);
-  num(copy.maxOpenPositions, 'copy.maxOpenPositions', 1, 100_000);
-  num(copy.maxOpenPositionsPerTarget, 'copy.maxOpenPositionsPerTarget', 1, 100_000);
-  num(copy.maxFillAgeSec, 'copy.maxFillAgeSec', 1, 86_400);
-  num(copy.minTargetNotionalUsdc, 'copy.minTargetNotionalUsdc', 0, 1_000_000_000);
-  num(copy.minPrice, 'copy.minPrice', 0, 1);
-  num(copy.maxPrice, 'copy.maxPrice', 0, 1);
-  num(copy.maxSlippage, 'copy.maxSlippage', 0, 1);
-  num(copy.minBookDepthUsdc, 'copy.minBookDepthUsdc', 0, 1_000_000_000);
-  num(copy.minSecondsToEndDate, 'copy.minSecondsToEndDate', 0, 1e9);
-  num(copy.maxSecondsToEndDate, 'copy.maxSecondsToEndDate', 0, 1e9);
-  num(c.risk.maxDailySpendUsdc, 'risk.maxDailySpendUsdc', 0, 1e12);
+  // validated AND written back as numbers: YAML allows "60" and both implementations must compute with 60
+  copy.orderSizeUsdc = num(copy.orderSizeUsdc, 'copy.orderSizeUsdc', 1, 1_000_000);
+  copy.maxBuysPerOutcome = int(copy.maxBuysPerOutcome, 'copy.maxBuysPerOutcome', 1, 1000);
+  copy.maxOpenPositions = int(copy.maxOpenPositions, 'copy.maxOpenPositions', 1, 100_000);
+  copy.maxOpenPositionsPerTarget = int(copy.maxOpenPositionsPerTarget, 'copy.maxOpenPositionsPerTarget', 1, 100_000);
+  copy.maxFillAgeSec = num(copy.maxFillAgeSec, 'copy.maxFillAgeSec', 1, 86_400);
+  copy.minTargetNotionalUsdc = num(copy.minTargetNotionalUsdc, 'copy.minTargetNotionalUsdc', 0, 1_000_000_000);
+  copy.minPrice = num(copy.minPrice, 'copy.minPrice', 0, 1);
+  copy.maxPrice = num(copy.maxPrice, 'copy.maxPrice', 0, 1);
+  copy.maxSlippage = num(copy.maxSlippage, 'copy.maxSlippage', 0, 1);
+  copy.minBookDepthUsdc = num(copy.minBookDepthUsdc, 'copy.minBookDepthUsdc', 0, 1_000_000_000);
+  copy.minSecondsToEndDate = num(copy.minSecondsToEndDate, 'copy.minSecondsToEndDate', 0, 1e9);
+  copy.maxSecondsToEndDate = num(copy.maxSecondsToEndDate, 'copy.maxSecondsToEndDate', 0, 1e9);
+  c.risk.maxDailySpendUsdc = num(c.risk.maxDailySpendUsdc, 'risk.maxDailySpendUsdc', 0, 1e12);
   if (copy.minPrice >= copy.maxPrice) throw new Error(`copy.minPrice ${copy.minPrice} >= copy.maxPrice ${copy.maxPrice}: every BUY would be rejected`);
   if (copy.maxSecondsToEndDate > 0 && copy.maxSecondsToEndDate <= copy.minSecondsToEndDate) {
     throw new Error('copy.maxSecondsToEndDate must be above copy.minSecondsToEndDate (or 0 to disable)');
@@ -152,12 +159,12 @@ export function buildConfig(raw: Record<string, any>): Config {
       throw new Error(`targets[${i}].entity must be a 0x address or a 12-character handle`);
     }
     t.entity = ADDRESS.test(t.entity) ? t.entity.toLowerCase() : t.entity;
-    if (t.orderSizeUsdc !== undefined) num(t.orderSizeUsdc, `targets[${i}].orderSizeUsdc`, 1, 1_000_000);
-    if (t.maxBuysPerOutcome !== undefined) num(t.maxBuysPerOutcome, `targets[${i}].maxBuysPerOutcome`, 1, 1000);
+    if (t.orderSizeUsdc !== undefined) t.orderSizeUsdc = num(t.orderSizeUsdc, `targets[${i}].orderSizeUsdc`, 1, 1_000_000);
+    if (t.maxBuysPerOutcome !== undefined) t.maxBuysPerOutcome = int(t.maxBuysPerOutcome, `targets[${i}].maxBuysPerOutcome`, 1, 1000);
   }
 
   const pm = c.polymarket;
-  num(pm.signatureType, 'polymarket.signatureType', 0, 2);
+  pm.signatureType = int(pm.signatureType, 'polymarket.signatureType', 0, 2);
   if (c.mode === 'live') {
     if (!pm.privateKey || !/^(0x)?[0-9a-fA-F]{64}$/.test(pm.privateKey)) throw new Error('live mode needs polymarket.privateKey (64 hex characters)');
     if (!pm.privateKey.startsWith('0x')) pm.privateKey = `0x${pm.privateKey}`;

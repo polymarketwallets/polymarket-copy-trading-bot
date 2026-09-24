@@ -5,7 +5,7 @@ import { CopyEngine } from './engine.js';
 import type { Logger } from './log.js';
 import { PolymarketGateway } from './polymarket.js';
 import { applyProxyFromEnv } from './proxy.js';
-import { BotState } from './state.js';
+import { BotState, InstanceLock } from './state.js';
 import { fmtUsd, toMicro } from './units.js';
 
 const ADDRESS = /^0x[0-9a-f]{40}$/i;
@@ -47,6 +47,10 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
   if (proxy) log.info('using proxy from the environment', { proxy });
   const client = new PmwClient({ apiKey: cfg.pmwallets.apiKey, baseUrl: cfg.pmwallets.baseUrl });
   const exchange = new PolymarketGateway(cfg.mode === 'live' ? cfg.polymarket : { ...cfg.polymarket, privateKey: undefined }, log);
+  // before anything reads the state: two bots on one state would each send the same order
+  const lock = new InstanceLock(cfg.dataDir, cfg.mode);
+  lock.acquire();
+  process.on('exit', () => lock.release());
   const state = new BotState(cfg.dataDir, cfg.mode);
 
   log.info(`pmwallets-copytrade starting in ${cfg.mode.toUpperCase()} mode`, { state: state.file, decisions: state.decisionsFile });
@@ -75,7 +79,6 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     wsOptions: agent ? { agent } : undefined,
     onEvent: (e: StreamEvent) => {
       if (e.type === 'hello') log.info('connected to the PMWallets fill stream', { session: e.session });
-      else if (e.type === 'gap' && e.skipped) log.info('reconnected before any fill was handled; nothing to replay');
       else if (e.type === 'gap') log.warn('missed fills detected; replaying from the last one handled', { reason: e.reason, fromBlock: e.fromBlock });
       else if (e.type === 'replayed' && e.delivered) log.info('replay done', { delivered: e.delivered });
       else if (e.type === 'replaced') log.warn('another connection with this API account took over the stream (one per account) — close the other bot or the browser feed page');
@@ -85,8 +88,12 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     },
   });
 
+  const pending = state.pendingOrders().length + state.pendingExits().length;
+  if (pending) log.info('resuming unfinished work from the last run', { unconfirmedOrders: state.pendingOrders().length, exits: state.pendingExits().length });
   await engine.sweepSettled();
+  await engine.tick();
   const sweep = setInterval(() => void engine.sweepSettled(), 10 * 60_000);
+  const ticker = setInterval(() => void engine.tick(), 15_000);
   await stream.start();
 
   let stopping = false;
@@ -95,8 +102,9 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     stopping = true;
     log.info('stopping…');
     clearInterval(sweep);
-    engine.stop();
+    clearInterval(ticker);
     await stream.stop();
+    lock.release();
     process.exit(code);
   }
   process.on('SIGINT', () => void shutdown());
