@@ -81,7 +81,7 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
       if (e.type === 'hello') log.info('connected to the PMWallets fill stream', { session: e.session });
       else if (e.type === 'gap') log.warn('missed fills detected; replaying from the last one handled', { reason: e.reason, fromBlock: e.fromBlock });
       else if (e.type === 'replayed' && e.delivered) log.info('replay done', { delivered: e.delivered });
-      else if (e.type === 'replaced') log.warn('another connection with this API account took over the stream (one per account) — close the other bot or the browser feed page');
+      else if (e.type === 'replaced') log.warn('another bot using this API account took over the stream (one per account; the newest API connection wins) — stop the other one');
       else if (e.type === 'disconnected') log.warn('stream disconnected; reconnecting', { code: e.code, reason: e.reason || undefined });
       else if (e.type === 'error') log.warn('stream error', { error: e.error.message });
       else if (e.type === 'fatal') { log.error('stream stopped', { error: e.error.message }); void shutdown(1); }
