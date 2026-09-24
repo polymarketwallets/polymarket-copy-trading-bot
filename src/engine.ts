@@ -356,15 +356,11 @@ export class CopyEngine {
           }
           continue;
         }
-        if (f.ambiguous) {
-          // several orders could be ours: booking any of them could book a manual trade. Keep the
-          // reservation and ask a human once it is clear the ambiguity will not resolve itself.
-          if (p.attempts + 1 >= RECHECK_ATTEMPTS && now - p.sentAt >= RECHECK_MIN_AGE_MS) {
-            this.needsReconcile(p, 'more than one unattributed order matches what was sent');
-          } else {
-            state.updatePendingOrder(p.key, { attempts: p.attempts + 1, nextAt: now + this.recheckDelay(p.attempts + 1) });
-            state.save();
-          }
+        if (f.candidates?.length) {
+          // the answer to our post was lost and something that looks like it filled: it may be ours, a
+          // manual trade, or another target's order — booking it to this target could sell the wrong
+          // position later. Keep the reservation and let the operator decide.
+          this.needsReconcile(p, `the order id never came back; possible fill(s): ${f.candidates.map((c) => `${c.orderId} ${fromMicro(c.shares)} sh / ${fmtUsd(c.usdc)}`).join('; ')}`);
           continue;
         }
         if (f.shares > 0n) {

@@ -47,8 +47,12 @@ export interface OrderOutcome {
 
 export interface TradeFill {
   shares: bigint; usdc: bigint; feeUsdc: bigint; feeShares: bigint; orderIds: string[];
-  /** unknown-id lookup found more than one order that could be ours: nothing is attributed */
-  ambiguous?: boolean;
+  /**
+   * unknown-id lookup: taker orders in this token and side, sent since then, not attributed to anything
+   * we booked, that are consistent with what we sent. Never booked automatically — any of them could
+   * be a manual trade or another target's order — they are shown to the operator to reconcile.
+   */
+  candidates?: { orderId: string; shares: bigint; usdc: bigint }[];
 }
 
 /** What the unknown-id lookup must match: the order exactly as we sent it. */
@@ -339,11 +343,11 @@ function add(out: TradeFill, t: any): void {
 /**
  * Our fills for one order, from our own trade history.
  *
- * Known order id: every trade whose taker_order_id is it. Unknown id (the post never answered): the
- * order is recognised only if EXACTLY ONE unattributed taker order in this token and side, since the
- * send time, is consistent with what we sent — no more shares than we asked for, every fill at our
- * limit or better. Zero candidates → nothing; two or more → `ambiguous`, nothing attributed: a manual
- * trade or another pending order must never be booked to this one.
+ * Known order id: every trade whose taker_order_id is it. Unknown id (the post never answered): nothing
+ * is attributed. The unattributed taker orders in this token and side since the send time that are
+ * consistent with what we sent (no more shares than we asked for, every fill at our limit or better)
+ * are returned as `candidates`: a similar manual trade, or another target's order in the same token,
+ * is indistinguishable from ours by its shape, so only a human can say which one it was.
  */
 export function attributeFills(trades: any[], orderId: string | null, sinceMs: number, match?: OrderMatch): TradeFill {
   if (orderId) {
@@ -353,7 +357,7 @@ export function attributeFills(trades: any[], orderId: string | null, sinceMs: n
     if (out.shares > 0n) out.orderIds.push(id);
     return out;
   }
-  if (!match) return EMPTY();
+  if (!match) return { ...EMPTY(), candidates: [] };
   const byOrder = new Map<string, any[]>();
   for (const t of trades) {
     const taker = String(t.taker_order_id ?? '').toLowerCase();
@@ -363,7 +367,7 @@ export function attributeFills(trades: any[], orderId: string | null, sinceMs: n
     if (tradeTimeMs(t.match_time) < sinceMs) continue;
     (byOrder.get(taker) ?? byOrder.set(taker, []).get(taker)!).push(t);
   }
-  const candidates: [string, TradeFill][] = [];
+  const candidates: { orderId: string; shares: bigint; usdc: bigint }[] = [];
   for (const [id, ts] of byOrder) {
     const out = EMPTY();
     let withinLimit = true;
@@ -372,8 +376,7 @@ export function attributeFills(trades: any[], orderId: string | null, sinceMs: n
       if (match.side === 'buy' ? px > match.limit : px < match.limit) withinLimit = false;
       add(out, t);
     }
-    if (withinLimit && out.shares <= match.shares) { out.orderIds.push(id); candidates.push([id, out]); }
+    if (withinLimit && out.shares <= match.shares) candidates.push({ orderId: id, shares: out.shares, usdc: out.usdc });
   }
-  if (candidates.length === 1) return candidates[0]![1];
-  return candidates.length > 1 ? { ...EMPTY(), ambiguous: true } : EMPTY();
+  return { ...EMPTY(), candidates };
 }

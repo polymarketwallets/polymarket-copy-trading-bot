@@ -32,20 +32,15 @@ describe('attributeFills', () => {
     expect(f.shares).toBe(toMicro(15));
     expect(f.orderIds).toEqual(['0xa']);
   });
-  it('unknown id: the single consistent candidate', () => {
+  it('unknown id: nothing is attributed — consistent orders are only offered as candidates', () => {
     const f = attributeFills([T({}), T({ taker_order_id: '0xz', asset_id: 'OTHER' })], null, SINCE, match());
-    expect(f.shares).toBe(toMicro(10));
-    expect(f.orderIds).toEqual(['0xa']);
+    expect(f.shares).toBe(0n);
+    expect(f.candidates).toEqual([{ orderId: '0xa', shares: toMicro(10), usdc: toMicro(5) }]);
   });
-  it('a manual trade bigger than what we sent, or above our limit, is not ours', () => {
-    expect(attributeFills([T({ size: '11' })], null, SINCE, match()).shares).toBe(0n);
-    expect(attributeFills([T({ price: '0.52' })], null, SINCE, match()).shares).toBe(0n);
-    expect(attributeFills([T({ trader_side: 'MAKER' })], null, SINCE, match()).shares).toBe(0n);
-    expect(attributeFills([T({ match_time: '1789999000' })], null, SINCE, match()).shares).toBe(0n);
-    expect(attributeFills([T({})], null, SINCE, match({ booked: ['0xa'] })).shares).toBe(0n);
-  });
-  it('two orders that could both be ours: ambiguous, nothing attributed', () => {
-    const f = attributeFills([T({}), T({ taker_order_id: '0xb', size: '4' })], null, SINCE, match());
-    expect(f).toMatchObject({ ambiguous: true, shares: 0n });
+  it('a trade bigger than what we sent, above our limit, a maker fill, too early or already booked is not even a candidate', () => {
+    for (const t of [T({ size: '11' }), T({ price: '0.52' }), T({ trader_side: 'MAKER' }), T({ match_time: '1789999000' })]) {
+      expect(attributeFills([t], null, SINCE, match()).candidates).toEqual([]);
+    }
+    expect(attributeFills([T({})], null, SINCE, match({ booked: ['0xa'] })).candidates).toEqual([]);
   });
 });

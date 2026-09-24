@@ -191,16 +191,16 @@ describe('orders whose result is not known', () => {
     expect(g.kinds().at(-1)).toBe('skipped_position_cap');
   });
 
-  it('an ambiguous match is never booked; after 5 minutes it waits for a human — still holding its reservation', async () => {
+  it('an order handed to the operator keeps its reservation until reconciled', async () => {
     const h = setup({ ...LIVE, risk: { maxDailySpendUsdc: 15 } });
     h.ex.buyResult = () => ({ orderId: '', status: 'unknown', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'post_error', recheck: true });
     await h.engine.onFill(fill(), ws);
-    h.ex.lateFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [], ambiguous: true };
+    h.ex.lateFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [], candidates: [{ orderId: '0xa', shares: 19_000_000n, usdc: 9_690_000n }, { orderId: '0xb', shares: 5_000_000n, usdc: 2_550_000n }] };
     for (let i = 0; i < 20; i++) { h.clock.t += 60_000; await h.engine.tick(); }
     expect(h.state.positions()).toEqual([]);
     expect(h.decisions().filter((d) => d.decision === 'order_needs_reconcile').length).toBe(1);
     const [p] = h.state.pendingOrders();
-    expect(p!.needsReconcile).toMatch(/more than one/);
+    expect(p!.needsReconcile).toMatch(/0xa .*0xb/);
     // the $9.69 it may have spent still counts: another $10 BUY would break the $15 cap
     h.ex.buyResult = (shares, limit) => ({ orderId: 'o2', status: 'filled', shares, usdc: (shares * limit) / 1_000_000n, feeUsdc: 0n, netShares: shares });
     await h.engine.onFill(fill({ tokenId: 'TOK2', ts: tsAt(h.clock.t) }), ws);
@@ -250,17 +250,35 @@ describe('orders whose result is not known', () => {
     expect(h.last()).toMatchObject({ decision: 'late_fill' });
   });
 
-  it('an order sent without an answer (orderId unknown) is reconciled by matching unattributed trades', async () => {
+  it('an order whose id never came back is not booked from a look-alike trade: it goes to the operator', async () => {
     const h = setup(LIVE);
     h.ex.buyResult = () => ({ orderId: '', status: 'unknown', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'post_error: socket hang up', recheck: true });
     await h.engine.onFill(fill(), ws);
     expect(h.state.pendingOrders()).toMatchObject([{ orderId: null }]);
-    h.ex.lateFill = { shares: 19_000_000n, usdc: 9_690_000n, feeUsdc: 0n, feeShares: 0n, orderIds: ['0xabc'] };
+    h.ex.lateFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [], candidates: [{ orderId: '0xabc', shares: 19_000_000n, usdc: 9_690_000n }] };
     h.clock.t += 1_000;
     await h.engine.tick();
     expect(h.ex.fillsCalls).toEqual([null]);
-    expect(h.state.position(T1, 'TOK')!.shares).toBe('19000000');
-    expect(h.state.isBooked('0xabc')).toBe(true);
+    expect(h.state.positions()).toEqual([]);
+    expect(h.state.pendingOrders()[0]!.needsReconcile).toMatch(/0xabc 19 sh/);
+  });
+
+  it('two targets, two unanswered orders in one token, only the second filled: nothing is booked to the wrong target', async () => {
+    const h = setup(LIVE);
+    h.ex.buyResult = () => ({ orderId: '', status: 'unknown', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'post_error', recheck: true });
+    await h.engine.onFill(fill({ entityId: T1 }), ws);
+    await h.engine.onFill(fill({ entityId: T2 }), ws);
+    expect(h.state.pendingOrders().length).toBe(2);
+    h.ex.lateFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [], candidates: [{ orderId: '0xsecond', shares: 19_000_000n, usdc: 9_690_000n }] };
+    h.clock.t += 1_000;
+    await h.engine.tick();
+    expect(h.state.positions()).toEqual([]);
+    expect(h.state.pendingOrders().every((p) => p.needsReconcile)).toBe(true);
+    const second = h.state.pendingOrders().find((p) => p.target === T2)!;
+    await h.engine.reconcile(second.key, { shares: 19_000_000n, usdc: 9_690_000n });
+    await h.engine.reconcile(h.state.pendingOrders()[0]!.key, null);
+    expect(h.state.position(T2, 'TOK')!.shares).toBe('19000000');
+    expect(h.state.position(T1, 'TOK')).toBeUndefined();
   });
 
   it('gives up only after repeated empty lookups spanning 5 minutes', async () => {
