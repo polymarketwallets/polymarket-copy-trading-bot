@@ -234,7 +234,9 @@ export class BotState {
 
   /** Append-only audit trail: one line per decision, including every skip and its reason. */
   logDecision(entry: Record<string, unknown>): void {
-    appendFileSync(this.decisionsFile, `${JSON.stringify({ at: new Date().toISOString(), ...entry }, (_, v) => (typeof v === 'bigint' ? v.toString() : v))}\n`);
+    // `at` is the log's own timestamp: no field of an entry may overwrite it
+    const { at: _dropped, ...rest } = entry;
+    appendFileSync(this.decisionsFile, `${JSON.stringify({ at: new Date().toISOString(), ...rest }, (_, v) => (typeof v === 'bigint' ? v.toString() : v))}\n`);
   }
 }
 

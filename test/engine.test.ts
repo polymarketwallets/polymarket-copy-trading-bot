@@ -75,7 +75,8 @@ describe('BUY', () => {
   it('dry-run: sizes to the budget at the best ask and books the position', async () => {
     const h = setup();
     await h.engine.onFill(fill(), ws);
-    expect(h.last()).toMatchObject({ decision: 'dry_run_buy', at: 0.51 });
+    expect(h.last()).toMatchObject({ decision: 'dry_run_buy', fillPrice: 0.51 });
+    expect(h.last().at, 'the decision log line keeps its timestamp').toMatch(/^\d{4}-\d{2}-\d{2}T/);
     const p = h.state.position(T1, 'TOK')!;
     expect(p.shares).toBe('19000000'); // $10 / 0.51 = 19.6, but at 0.51 only whole shares land on the cent grid
     expect(p.buyCount).toBe(1);
@@ -510,7 +511,7 @@ describe('SELL', () => {
     const h = setup();
     await h.engine.onFill(fill(), ws);
     await h.engine.onFill(fill({ side: 'SELL' }), ws);
-    expect(h.last()).toMatchObject({ decision: 'dry_run_sell', at: 0.49 });
+    expect(h.last()).toMatchObject({ decision: 'dry_run_sell', fillPrice: 0.49 });
     expect(h.state.positions()).toEqual([]);
   });
 

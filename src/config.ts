@@ -46,9 +46,13 @@ export interface RiskConfig {
 export interface PolymarketConfig {
   clobUrl: string;
   privateKey?: string;
-  /** 0 = EOA, 1 = POLY_PROXY (email / Magic login), 2 = POLY_GNOSIS_SAFE (browser-wallet login) */
-  signatureType: number;
-  /** the Polymarket account address that holds your USDC (your profile address) */
+  /**
+   * Which kind of Polymarket account signs the orders — no default, it must be stated for trading:
+   * 3 = Deposit Wallet (every account created on polymarket.com since 2026-05-04), 1 = Proxy Wallet
+   * (older email / Google sign-up), 2 = Safe Wallet (older browser-wallet sign-up), 0 = plain EOA.
+   */
+  signatureType?: number;
+  /** the Polymarket account wallet that holds the funds (the address in the polymarket.com profile menu) */
   funderAddress?: string;
   apiKey?: string;
   apiSecret?: string;
@@ -67,9 +71,9 @@ export interface Config {
   dataDir: string;
 }
 
-export const DEFAULTS: Omit<Config, 'pmwallets' | 'polymarket' | 'targets'> & { polymarket: Pick<PolymarketConfig, 'clobUrl' | 'signatureType'> } = {
+export const DEFAULTS: Omit<Config, 'pmwallets' | 'polymarket' | 'targets'> & { polymarket: Pick<PolymarketConfig, 'clobUrl'> } = {
   mode: 'dry-run',
-  polymarket: { clobUrl: 'https://clob.polymarket.com', signatureType: 2 },
+  polymarket: { clobUrl: 'https://clob.polymarket.com' },
   copy: {
     orderSizeUsdc: 10,
     roles: ['taker', 'maker'],
@@ -164,20 +168,39 @@ export function buildConfig(raw: Record<string, any>): Config {
   }
 
   const pm = c.polymarket;
-  pm.signatureType = int(pm.signatureType, 'polymarket.signatureType', 0, 2);
-  if (c.mode === 'live') {
-    if (!pm.privateKey || !/^(0x)?[0-9a-fA-F]{64}$/.test(pm.privateKey)) throw new Error('live mode needs polymarket.privateKey (64 hex characters)');
-    if (!pm.privateKey.startsWith('0x')) pm.privateKey = `0x${pm.privateKey}`;
-    if (pm.signatureType !== 0 && !(pm.funderAddress && ADDRESS.test(pm.funderAddress))) {
-      throw new Error('live mode with a proxy/safe signature type needs polymarket.funderAddress (your Polymarket profile address)');
-    }
+  if (pm.signatureType !== undefined && pm.signatureType !== null && String(pm.signatureType) !== '') {
+    pm.signatureType = int(pm.signatureType, 'polymarket.signatureType', 0, 3);
+  } else {
+    delete pm.signatureType;
   }
+  if (c.mode === 'live') checkTradingConfig(c);
   return c;
+}
+
+/**
+ * What trading needs, checked for live mode and for `check`. The account type has no default on
+ * purpose: signing with the wrong one gets every order rejected, and a default that changed under an
+ * existing user (Polymarket moved new accounts to Deposit Wallets in May 2026) would do exactly that.
+ */
+export function checkTradingConfig(c: Config): void {
+  const pm = c.polymarket;
+  if (!pm.privateKey || !/^(0x)?[0-9a-fA-F]{64}$/.test(pm.privateKey)) throw new Error('trading needs polymarket.privateKey (64 hex characters)');
+  if (!pm.privateKey.startsWith('0x')) pm.privateKey = `0x${pm.privateKey}`;
+  if (pm.signatureType === undefined) {
+    throw new Error('set polymarket.signatureType: 3 for accounts created on polymarket.com since 2026-05-04 (Deposit Wallet), '
+      + '1 for older email/Google accounts, 2 for older browser-wallet accounts, 0 for a plain wallet — see the README');
+  }
+  if (pm.signatureType !== 0 && !(pm.funderAddress && ADDRESS.test(pm.funderAddress))) {
+    throw new Error('this signatureType needs polymarket.funderAddress: the account wallet address shown in the polymarket.com profile menu');
+  }
 }
 
 export function loadConfig(path: string, env: NodeJS.ProcessEnv = process.env): Config {
   const text = readFileSync(path, 'utf8');
   // substitute only in non-comment content so an unset variable named in a comment is not an error
   const withoutComments = text.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l)).join('\n');
-  return buildConfig((parse(substituteEnv(withoutComments, env)) ?? {}) as Record<string, any>);
+  // failsafe schema: every scalar stays a string. The default schema reads an unquoted 0x… value — a
+  // private key or an address, typically substituted from the environment — as a hex NUMBER, which
+  // destroys it. Numbers are converted by buildConfig's own validation, which accepts strings.
+  return buildConfig((parse(substituteEnv(withoutComments, env), { schema: 'failsafe' }) || {}) as Record<string, any>);
 }

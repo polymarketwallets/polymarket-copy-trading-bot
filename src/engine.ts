@@ -195,7 +195,7 @@ export class CopyEngine {
       const usdc = (shares * ask) / UNIT;
       state.addBuy(pos, shares, usdc);
       state.addSpend(usdc, new Date(this.now()));
-      return this.decide(base, 'dry_run_buy', { shares: fromMicro(shares), at: fromMicro(ask), cost: fmtUsd(usdc), market: market.question, outcome: outcome.outcome });
+      return this.decide(base, 'dry_run_buy', { shares: fromMicro(shares), fillPrice: fromMicro(ask), cost: fmtUsd(usdc), market: market.question, outcome: outcome.outcome });
     }
 
     const key = `buy|${fill.eventId}`;
@@ -332,7 +332,7 @@ export class CopyEngine {
     if (cfg.mode === 'dry-run') {
       const usdc = (shares * bid) / UNIT;
       state.reduce(target, tokenId, shares);
-      return done('dry_run_sell', { shares: fromMicro(shares), at: fromMicro(bid), proceeds: fmtUsd(usdc), pnl: fmtUsd(usdc - BigInt(held.costUsdc)) });
+      return done('dry_run_sell', { shares: fromMicro(shares), fillPrice: fromMicro(bid), proceeds: fmtUsd(usdc), pnl: fmtUsd(usdc - BigInt(held.costUsdc)) });
     }
 
     let balance: bigint;

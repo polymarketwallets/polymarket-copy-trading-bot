@@ -94,10 +94,22 @@ export class PolymarketGateway {
 
   get canTrade(): boolean { return this.clob !== null; }
 
+  private signer: string | null = null;
+  /** the address that signs (the private key's), after connect() */
+  get signerAddress(): string | null { return this.signer; }
+
+  /** true when Polymarket only lets this account close positions (e.g. a restricted region) */
+  async closedOnly(): Promise<boolean> {
+    const r: any = await this.requireClob().getClosedOnlyMode();
+    if (r?.error || r?.errorMsg) throw new Error(String(r.errorMsg || r.error));
+    return r?.closed_only === true;
+  }
+
   /** Build the trading client and its L2 credentials. Without a private key the gateway is read-only. */
   async connect(): Promise<void> {
     if (!this.cfg.privateKey) return;
     const account = privateKeyToAccount(this.cfg.privateKey as `0x${string}`);
+    this.signer = account.address;
     const signer = createWalletClient({ account, chain: polygon, transport: http() });
     const base = {
       host: this.cfg.clobUrl,

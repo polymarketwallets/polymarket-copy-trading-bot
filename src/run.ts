@@ -69,6 +69,7 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     const usdc = await exchange.collateralBalance();
     log.info('polymarket balance', { usdc: fmtUsd(usdc) });
     if (usdc < toMicro(cfg.copy.orderSizeUsdc)) log.warn('balance is below one order: BUYs will be rejected until you deposit');
+    if (await exchange.closedOnly().catch(() => false)) log.warn('Polymarket lets this account only close positions (region or account restriction): BUYs will be rejected');
   }
 
   const engine = new CopyEngine({ cfg, exchange, state, log, targets });

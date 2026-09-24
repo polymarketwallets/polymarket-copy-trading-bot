@@ -2,19 +2,21 @@
 import { copyFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig } from './config.js';
+import { checkTradingConfig, loadConfig } from './config.js';
+import { PmwClient } from 'pmwallets';
+import { applyProxyFromEnv } from './proxy.js';
 import { consoleLogger } from './log.js';
 import { run } from './run.js';
 import { BotState, InstanceLock } from './state.js';
 import { CopyEngine } from './engine.js';
 import { PolymarketGateway } from './polymarket.js';
-import { toMicro } from './units.js';
-import { fromMicro } from './units.js';
+import { fmtUsd, fromMicro, toMicro } from './units.js';
 
 const HELP = `pmwallets-copytrade — copy the Polymarket wallets you follow on PMWallets
 
   pmwallets-copytrade init [config.yaml]        write an example config
   pmwallets-copytrade run [--config config.yaml] [--json]
+  pmwallets-copytrade check [--config config.yaml]    verify the trading setup (read-only; places no order)
   pmwallets-copytrade status [--config config.yaml]
   pmwallets-copytrade reconcile [<key> --none | <key> --filled <shares> --usdc <usdc>] [--config config.yaml]
       settle an order the bot could not verify by itself (see \`status\`); run it with the bot stopped
@@ -39,6 +41,10 @@ async function main() {
   if (cmd === 'run') {
     const cfg = loadConfig(arg('--config', 'config.yaml'));
     await run(cfg, consoleLogger(process.argv.includes('--json')));
+    return;
+  }
+  if (cmd === 'check') {
+    process.exitCode = await check(arg('--config', 'config.yaml'));
     return;
   }
   if (cmd === 'status') {
@@ -79,6 +85,56 @@ async function main() {
   }
   console.log(HELP);
   if (cmd && cmd !== 'help' && cmd !== '--help') process.exitCode = 1;
+}
+
+const ACCOUNT_TYPES = ['0 · plain wallet (EOA)', '1 · Proxy Wallet (older email/Google account)', '2 · Safe Wallet (older browser-wallet account)', '3 · Deposit Wallet (polymarket.com account since 2026-05-04)'];
+
+/**
+ * Everything live trading depends on, checked without trading: the config, the PMWallets key and its
+ * subscriptions, the Polymarket credentials, and whether the account the orders would come from is the
+ * one holding the money. Exit 0 only when all of it is in order.
+ */
+async function check(path: string): Promise<number> {
+  const ok = (m: string) => console.log(`  ✓ ${m}`);
+  const bad = (m: string) => console.log(`  ✗ ${m}`);
+  let problems = 0;
+  const cfg = loadConfig(path);
+  const { proxy } = applyProxyFromEnv();
+  if (proxy) ok(`proxy ${proxy}`);
+
+  console.log('PMWallets');
+  try {
+    const subs = await new PmwClient({ apiKey: cfg.pmwallets.apiKey, baseUrl: cfg.pmwallets.baseUrl }).subscriptions();
+    const active = subs.filter((s) => s.status === 'active');
+    ok(`API key accepted; ${active.length} active subscription(s)${subs.length > active.length ? `, ${subs.length - active.length} paused` : ''}`);
+    if (!active.length) { bad('nothing to copy yet: subscribe to a trader on pmwallets.com'); problems++; }
+  } catch (e) { bad(`API key: ${(e as Error).message}`); problems++; }
+
+  console.log('Polymarket');
+  try { checkTradingConfig(cfg); } catch (e) { bad((e as Error).message); return problems + 1; }
+  const type = cfg.polymarket.signatureType!;
+  ok(`account type ${ACCOUNT_TYPES[type]}`);
+  const gw = new PolymarketGateway(cfg.polymarket, { info() {}, warn() {}, error: (m: string) => console.error(m) });
+  try { await gw.connect(); } catch (e) { bad(`could not derive the trading credentials: ${(e as Error).message}`); return problems + 1; }
+  ok(`signer ${gw.signerAddress}`);
+  ok(`funds held by ${cfg.polymarket.funderAddress ?? gw.signerAddress}`);
+  try {
+    const usdc = await gw.collateralBalance();
+    if (usdc > 0n) ok(`balance ${fmtUsd(usdc)} available to trade`);
+    else {
+      bad('balance $0.00 — if polymarket.com shows money in this account, signatureType or funderAddress is wrong');
+      problems++;
+    }
+    if (usdc > 0n && usdc < toMicro(cfg.copy.orderSizeUsdc)) { bad(`balance is below one order (copy.orderSizeUsdc = $${cfg.copy.orderSizeUsdc})`); problems++; }
+  } catch (e) { bad(`balance lookup failed: ${(e as Error).message}`); problems++; }
+  try {
+    if (await gw.closedOnly()) { bad('Polymarket lets this account only close positions (region or account restriction): BUYs will be rejected'); problems++; }
+    else ok('account may open positions');
+  } catch (e) { bad(`restriction lookup failed: ${(e as Error).message}`); problems++; }
+  if (type === 0) console.log('  ! a plain wallet must approve the exchange contracts itself before its first trade (see the README)');
+
+  console.log(problems ? `\n${problems} problem(s): fix them before mode: live` : `\nready for mode: live (the bot is in ${cfg.mode} mode now)`);
+  return problems ? 1 : 0;
 }
 
 main().catch((e: unknown) => { console.error(`error: ${(e as Error).message}`); process.exit(1); });

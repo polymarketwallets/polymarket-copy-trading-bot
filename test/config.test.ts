@@ -9,11 +9,21 @@ describe('config', () => {
     expect(c.mode).toBe('dry-run');
     expect(c.copy).toMatchObject({ orderSizeUsdc: 10, maxBuysPerOutcome: 3, minPrice: 0.05, maxPrice: 0.95, minBookDepthUsdc: 50 });
   });
-  it('refuses live mode without a key, or a proxy account without its funder address', () => {
+  it('refuses live mode without a key, without an explicit account type, or without the funder address', () => {
+    const pk = 'ab'.repeat(32);
+    const FUNDER = '0x1111111111111111111111111111111111111111';
     expect(() => buildConfig({ ...key, mode: 'live' })).toThrow(/privateKey/);
-    expect(() => buildConfig({ ...key, mode: 'live', polymarket: { privateKey: 'ab'.repeat(32) } })).toThrow(/funderAddress/);
-    const c = buildConfig({ ...key, mode: 'live', polymarket: { privateKey: 'ab'.repeat(32), signatureType: 0 } });
-    expect(c.polymarket.privateKey).toBe(`0x${'ab'.repeat(32)}`);
+    // no default account type: signing as the wrong one gets every order rejected
+    expect(() => buildConfig({ ...key, mode: 'live', polymarket: { privateKey: pk } })).toThrow(/signatureType: 3 for accounts created on polymarket.com since 2026-05-04/);
+    expect(() => buildConfig({ ...key, mode: 'live', polymarket: { privateKey: pk, signatureType: 3 } })).toThrow(/funderAddress/);
+    expect(() => buildConfig({ ...key, mode: 'live', polymarket: { privateKey: pk, signatureType: 4, funderAddress: FUNDER } })).toThrow(/signatureType must be a number in \[0, 3\]/);
+    const dw = buildConfig({ ...key, mode: 'live', polymarket: { privateKey: pk, signatureType: '3', funderAddress: FUNDER } });
+    expect(dw.polymarket.signatureType).toBe(3);
+    const eoa = buildConfig({ ...key, mode: 'live', polymarket: { privateKey: pk, signatureType: 0 } });
+    expect(eoa.polymarket.privateKey).toBe(`0x${pk}`);
+  });
+  it('dry-run needs no Polymarket settings at all', () => {
+    expect(buildConfig(key).polymarket.signatureType).toBeUndefined();
   });
   it('rejects settings that would silently block every trade', () => {
     expect(() => buildConfig({ ...key, copy: { minPrice: 0.9, maxPrice: 0.5 } })).toThrow(/minPrice/);
