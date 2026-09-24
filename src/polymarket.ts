@@ -45,7 +45,38 @@ export interface OrderOutcome {
   recheck?: boolean;
 }
 
-export interface TradeFill { shares: bigint; usdc: bigint; feeUsdc: bigint; feeShares: bigint; orderIds: string[] }
+export interface TradeFill {
+  shares: bigint; usdc: bigint; feeUsdc: bigint; feeShares: bigint; orderIds: string[];
+  /** unknown-id lookup found more than one order that could be ours: nothing is attributed */
+  ambiguous?: boolean;
+}
+
+/** What the unknown-id lookup must match: the order exactly as we sent it. */
+export interface OrderMatch { tokenId: string; side: 'buy' | 'sell'; shares: bigint; limit: bigint; isBooked: (id: string) => boolean }
+
+/**
+ * How to read what postOrder gave back. Shared rule with the Python bot (testdata/post-classification.json):
+ *   answer   — a 2xx body, or any body carrying an order id: the exchange took the order; read it
+ *   rejected — a 4xx with a readable error and no order id: the exchange refused it, nothing can fill
+ *   unknown  — everything else (5xx, gateway errors, empty or unreadable bodies, transport errors):
+ *              the order may have been accepted, so it must be treated as possibly filled
+ * The TS SDK does not throw on HTTP errors; it returns `{ error, status }` (status = HTTP code), and
+ * `{ error }` with no status when no response arrived at all.
+ */
+export function classifyPost(resp: unknown): 'answer' | 'rejected' | 'unknown' {
+  if (!resp || typeof resp !== 'object') return 'unknown';
+  const r = resp as Record<string, unknown>;
+  if (r['orderID'] || r['orderId']) return 'answer';
+  const httpStatus = typeof r['status'] === 'number' ? (r['status'] as number) : null;
+  const err = r['errorMsg'] || r['error'];
+  if (httpStatus === null) {
+    // a 2xx body has no numeric status; an error with no status is a transport failure
+    if (r['error'] !== undefined && r['success'] === undefined) return 'unknown';
+    return err ? 'rejected' : 'answer';
+  }
+  if (httpStatus >= 400 && httpStatus < 500 && typeof err === 'string' && err.trim()) return 'rejected';
+  return 'unknown';
+}
 
 const ZERO_FILL = /no orders found|couldn't be fully filled|fully filled or killed/i;
 
@@ -224,9 +255,11 @@ export class PolymarketGateway {
    * on taker_order_id; the response's making/taking amounts are the fallback when history lags.
    */
   private async settle(resp: any, side: 'buy' | 'sell', tokenId: string, conditionId: string, since: number, asked: { shares: bigint; price: bigint }): Promise<OrderOutcome> {
-    const orderId: string = resp?.orderID || resp?.orderId || resp?.id || '';
+    const kind = classifyPost(resp);
+    if (kind === 'unknown') return this.unknown(new Error(`no usable answer: ${JSON.stringify(resp ?? null).slice(0, 200)}`));
+    const orderId: string = resp?.orderID || resp?.orderId || '';
     const err = String(resp?.errorMsg || resp?.error || '');
-    if (!resp || (err && !orderId)) return this.failed(err || 'empty_response');
+    if (kind === 'rejected') return this.failed(err.slice(0, 300));
     if (err && ZERO_FILL.test(err)) {
       return { orderId, status: 'none', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: err.slice(0, 200), recheck: true };
     }
@@ -261,31 +294,10 @@ export class PolymarketGateway {
    * volume in a busy market can push ours off the first one. BUY taker fees are charged in shares:
    * fee = size × fee_rate_bps / 10000, converted at the fill price.
    */
-  async fillsOf(orderId: string | null, conditionId: string, sinceMs: number, match?: { tokenId: string; side: 'buy' | 'sell'; isBooked: (id: string) => boolean }): Promise<TradeFill> {
+  async fillsOf(orderId: string | null, conditionId: string, sinceMs: number, match?: OrderMatch): Promise<TradeFill> {
     const clob = this.requireClob();
     const trades = await clob.getTrades({ market: conditionId, after: String(Math.floor(sinceMs / 1000)) }, false);
-    const out: TradeFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [] };
-    const id = orderId?.toLowerCase() ?? null;
-    for (const t of Array.isArray(trades) ? trades : []) {
-      const taker = String(t.taker_order_id ?? '').toLowerCase();
-      if (id) {
-        if (taker !== id) continue;
-      } else {
-        if (!match || !taker || match.isBooked(taker)) continue;
-        if (String(t.trader_side ?? '').toUpperCase() !== 'TAKER') continue;
-        if (String(t.asset_id) !== match.tokenId || String(t.side ?? '').toLowerCase() !== match.side) continue;
-        if (tradeTimeMs(t.match_time) < sinceMs) continue;
-      }
-      const size = toMicro(t.size);
-      const price = toMicro(t.price);
-      const feeShares = (size * BigInt(t.fee_rate_bps || '0')) / 10_000n;
-      out.shares += size;
-      out.usdc += (size * price) / UNIT;
-      out.feeShares += feeShares;
-      out.feeUsdc += (feeShares * price) / UNIT;
-      if (!out.orderIds.includes(taker)) out.orderIds.push(taker);
-    }
-    return out;
+    return attributeFills(Array.isArray(trades) ? trades : [], orderId, sinceMs, match);
   }
 
   /** Outcome-token balance of the trading account (1e-6 shares). */
@@ -310,4 +322,58 @@ export function tradeTimeMs(v: unknown): number {
   if (/^\d+(\.\d+)?$/.test(str)) { const n = Number(str); return n < 1e12 ? n * 1000 : n; }
   const t = Date.parse(str);
   return Number.isFinite(t) ? t : 0;
+}
+
+const EMPTY = (): TradeFill => ({ shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [] });
+
+function add(out: TradeFill, t: any): void {
+  const size = toMicro(t.size);
+  const price = toMicro(t.price);
+  const feeShares = (size * BigInt(t.fee_rate_bps || '0')) / 10_000n;
+  out.shares += size;
+  out.usdc += (size * price) / UNIT;
+  out.feeShares += feeShares;
+  out.feeUsdc += (feeShares * price) / UNIT;
+}
+
+/**
+ * Our fills for one order, from our own trade history.
+ *
+ * Known order id: every trade whose taker_order_id is it. Unknown id (the post never answered): the
+ * order is recognised only if EXACTLY ONE unattributed taker order in this token and side, since the
+ * send time, is consistent with what we sent — no more shares than we asked for, every fill at our
+ * limit or better. Zero candidates → nothing; two or more → `ambiguous`, nothing attributed: a manual
+ * trade or another pending order must never be booked to this one.
+ */
+export function attributeFills(trades: any[], orderId: string | null, sinceMs: number, match?: OrderMatch): TradeFill {
+  if (orderId) {
+    const out = EMPTY();
+    const id = orderId.toLowerCase();
+    for (const t of trades) if (String(t.taker_order_id ?? '').toLowerCase() === id) add(out, t);
+    if (out.shares > 0n) out.orderIds.push(id);
+    return out;
+  }
+  if (!match) return EMPTY();
+  const byOrder = new Map<string, any[]>();
+  for (const t of trades) {
+    const taker = String(t.taker_order_id ?? '').toLowerCase();
+    if (!taker || match.isBooked(taker)) continue;
+    if (String(t.trader_side ?? '').toUpperCase() !== 'TAKER') continue;
+    if (String(t.asset_id) !== match.tokenId || String(t.side ?? '').toLowerCase() !== match.side) continue;
+    if (tradeTimeMs(t.match_time) < sinceMs) continue;
+    (byOrder.get(taker) ?? byOrder.set(taker, []).get(taker)!).push(t);
+  }
+  const candidates: [string, TradeFill][] = [];
+  for (const [id, ts] of byOrder) {
+    const out = EMPTY();
+    let withinLimit = true;
+    for (const t of ts) {
+      const px = toMicro(t.price);
+      if (match.side === 'buy' ? px > match.limit : px < match.limit) withinLimit = false;
+      add(out, t);
+    }
+    if (withinLimit && out.shares <= match.shares) { out.orderIds.push(id); candidates.push([id, out]); }
+  }
+  if (candidates.length === 1) return candidates[0]![1];
+  return candidates.length > 1 ? { ...EMPTY(), ambiguous: true } : EMPTY();
 }

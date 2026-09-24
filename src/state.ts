@@ -30,6 +30,11 @@ export interface PendingOrder {
   conditionId: string;
   question?: string;
   outcome?: string;
+  /** what was sent (1e-6 units, strings) — the unknown-id lookup only accepts a fill consistent with it */
+  shares: string;
+  limit: string;
+  /** BUY: USDC held against the daily cap and the position caps until the outcome is known */
+  reserveUsdc: string;
   /** ms epoch the order was sent */
   sentAt: number;
   attempts: number;
@@ -161,6 +166,22 @@ export class BotState {
   drop(target: string, tokenId: string): void { delete this.data.positions[posKey(target, tokenId)]; }
 
   pendingOrders(): PendingOrder[] { return this.data.pendingOrders; }
+  /** USDC reserved by BUYs whose outcome is not known yet */
+  reservedUsdc(): bigint {
+    let n = 0n;
+    for (const p of this.data.pendingOrders) if (p.side === 'buy') n += BigInt(p.reserveUsdc || '0');
+    return n;
+  }
+  /** (target, token) pairs that are open or may be about to be: booked positions plus unconfirmed BUYs */
+  openOutcomes(): { target: string; tokenId: string }[] {
+    const seen = new Set<string>();
+    const out: { target: string; tokenId: string }[] = [];
+    for (const x of [...this.positions(), ...this.data.pendingOrders.filter((p) => p.side === 'buy')]) {
+      const k = posKey(x.target, x.tokenId);
+      if (!seen.has(k)) { seen.add(k); out.push({ target: x.target, tokenId: x.tokenId }); }
+    }
+    return out;
+  }
   addPendingOrder(p: PendingOrder): void { this.data.pendingOrders = [...this.data.pendingOrders.filter((x) => x.key !== p.key), p]; }
   updatePendingOrder(key: string, patch: Partial<PendingOrder>): void {
     this.data.pendingOrders = this.data.pendingOrders.map((x) => (x.key === key ? { ...x, ...patch } : x));

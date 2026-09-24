@@ -175,6 +175,30 @@ describe('BUY', () => {
 });
 
 describe('orders whose result is not known', () => {
+  it('unconfirmed BUYs hold their budget and position slot against the caps', async () => {
+    const h = setup({ ...LIVE, risk: { maxDailySpendUsdc: 15 } });
+    h.ex.buyResult = () => ({ orderId: '', status: 'unknown', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'post_error', recheck: true });
+    await h.engine.onFill(fill({ tokenId: 'TOK' }), ws);
+    await h.engine.onFill(fill({ tokenId: 'TOK2' }), ws);
+    expect(h.kinds().at(-1)).toBe('skipped_daily_spend_cap');
+    expect(h.ex.buys.length).toBe(1);
+    const g = setup({ ...LIVE, copy: { maxOpenPositions: 1 } });
+    g.ex.buyResult = h.ex.buyResult;
+    await g.engine.onFill(fill({ tokenId: 'TOK' }), ws);
+    await g.engine.onFill(fill({ tokenId: 'TOK2' }), ws);
+    expect(g.kinds().at(-1)).toBe('skipped_position_cap');
+  });
+
+  it('an ambiguous match is never booked; it is handed to a human after 5 minutes', async () => {
+    const h = setup(LIVE);
+    h.ex.buyResult = () => ({ orderId: '', status: 'unknown', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'post_error', recheck: true });
+    await h.engine.onFill(fill(), ws);
+    h.ex.lateFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [], ambiguous: true };
+    for (let i = 0; i < 20 && h.state.pendingOrders().length; i++) { h.clock.t += 60_000; await h.engine.tick(); }
+    expect(h.state.positions()).toEqual([]);
+    expect(h.last()).toMatchObject({ decision: 'order_needs_reconcile' });
+  });
+
   it('a "killed" order that did fill is booked by tick() — even after a restart', async () => {
     const h = setup(LIVE);
     h.ex.buyResult = () => ({ orderId: 'o9', status: 'none', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: "order couldn't be fully filled", recheck: true });
@@ -276,6 +300,18 @@ describe('SELL', () => {
     h.clock.t += 1_000;
     await again.tick();
     expect(h.ex.sells.length).toBe(1);
+  });
+
+  it('a paused market keeps the exit and retries it; only a resolved one drops it', async () => {
+    const h = setup(LIVE);
+    await h.engine.onFill(fill(), ws);
+    h.ex.market_ = { ...h.ex.market_, acceptingOrders: false };
+    await h.engine.onFill(fill({ side: 'SELL' }), ws);
+    expect(h.last()).toMatchObject({ decision: 'exit_retry_market_paused' });
+    h.ex.market_ = { ...h.ex.market_, acceptingOrders: true };
+    h.clock.t += 1_000; await h.engine.tick();
+    expect(h.ex.sells.length).toBe(1);
+    expect(h.state.positions()).toEqual([]);
   });
 
   it('an old SELL still exits — freshness is an entry rule only', async () => {

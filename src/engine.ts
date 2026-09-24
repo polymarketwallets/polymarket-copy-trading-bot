@@ -2,7 +2,7 @@ import type { Fill, FillMeta } from 'pmwallets';
 import type { Config, TargetConfig } from './config.js';
 import { bookGate, marketGate, slippageGate } from './filters.js';
 import type { Logger } from './log.js';
-import type { Book, Market, OrderOutcome, TradeFill } from './polymarket.js';
+import type { Book, Market, OrderMatch, OrderOutcome, TradeFill } from './polymarket.js';
 import type { BotState, PendingExit, PendingOrder, Position } from './state.js';
 import { UNIT, clampLimit, fmtUsd, fromMicro, parseFillTs, roundBuyShares, toMicro } from './units.js';
 
@@ -14,7 +14,7 @@ export interface Exchange {
   orderbook(tokenId: string): Promise<Book>;
   buyFok(tokenId: string, conditionId: string, limit: bigint, shares: bigint): Promise<OrderOutcome>;
   sellFak(tokenId: string, conditionId: string, limit: bigint, shares: bigint): Promise<OrderOutcome>;
-  fillsOf(orderId: string | null, conditionId: string, sinceMs: number, match?: { tokenId: string; side: 'buy' | 'sell'; isBooked: (id: string) => boolean }): Promise<TradeFill>;
+  fillsOf(orderId: string | null, conditionId: string, sinceMs: number, match?: OrderMatch): Promise<TradeFill>;
   tokenBalance(tokenId: string): Promise<bigint>;
 }
 
@@ -145,18 +145,21 @@ export class CopyEngine {
     const held = state.position(target, fill.tokenId);
     const maxBuys = tcfg?.maxBuysPerOutcome ?? cfg.copy.maxBuysPerOutcome;
     if (held && held.buyCount >= maxBuys) return this.decide(base, 'skipped_max_buys_per_outcome', { buyCount: held.buyCount });
-    if (!held) {
-      const open = state.positions();
-      if (open.filter((p) => p.target === target).length >= cfg.copy.maxOpenPositionsPerTarget) return this.decide(base, 'skipped_target_position_cap');
-      if (open.length >= cfg.copy.maxOpenPositions) return this.decide(base, 'skipped_position_cap');
-    }
     // an order still being confirmed on this outcome counts as open: buying again could double up
     if (state.pendingOrders().some((p) => p.target === target && p.tokenId === fill.tokenId && p.side === 'buy')) {
       return this.decide(base, 'skipped_order_unconfirmed');
     }
+    // the caps count unconfirmed BUYs too: each may turn out filled, and all of them together must
+    // still fit inside the limits the user set
+    if (!held) {
+      const open = state.openOutcomes();
+      if (open.filter((p) => p.target === target).length >= cfg.copy.maxOpenPositionsPerTarget) return this.decide(base, 'skipped_target_position_cap');
+      if (open.length >= cfg.copy.maxOpenPositions) return this.decide(base, 'skipped_position_cap');
+    }
     const budget = toMicro(tcfg?.orderSizeUsdc ?? cfg.copy.orderSizeUsdc);
-    if (cfg.risk.maxDailySpendUsdc > 0 && state.spentToday(new Date(this.now())) + budget > toMicro(cfg.risk.maxDailySpendUsdc)) {
-      return this.decide(base, 'skipped_daily_spend_cap', { spentToday: fmtUsd(state.spentToday(new Date(this.now()))) });
+    const committed = state.spentToday(new Date(this.now())) + state.reservedUsdc();
+    if (cfg.risk.maxDailySpendUsdc > 0 && committed + budget > toMicro(cfg.risk.maxDailySpendUsdc)) {
+      return this.decide(base, 'skipped_daily_spend_cap', { spentToday: fmtUsd(state.spentToday(new Date(this.now()))), reserved: fmtUsd(state.reservedUsdc()) });
     }
 
     let conditionId: string; let market: Market; let book: Book;
@@ -190,7 +193,8 @@ export class CopyEngine {
     }
 
     const key = `buy|${fill.eventId}`;
-    this.commitOrder(fill.eventId, { key, side: 'buy', orderId: null, ...pos, sentAt: this.now(), attempts: 0, nextAt: this.now() + this.recheckDelay(0) },
+    const reserve = (shares * limit) / UNIT;
+    this.commitOrder(fill.eventId, { key, side: 'buy', orderId: null, ...pos, shares: shares.toString(), limit: limit.toString(), reserveUsdc: reserve.toString(), sentAt: this.now(), attempts: 0, nextAt: this.now() + this.recheckDelay(0) },
       { ...base, decision: 'buy_submitted', limit: fromMicro(limit), shares: fromMicro(shares) });
     const r = await exchange.buyFok(fill.tokenId, conditionId, limit, shares);
     this.afterOrder(key, r, base, { market: market.question, outcome: outcome.outcome });
@@ -268,8 +272,11 @@ export class CopyEngine {
       market = await exchange.market(held.conditionId, 0);
       book = await exchange.orderbook(tokenId);
     } catch (e) { return retry('exit_retry_lookup_failed', { reason: (e as Error).message.slice(0, 200) }); }
+    // resolved: the settlement sweep takes it from here. Paused (inactive / not accepting orders) is
+    // temporary — keep the exit and try again, or a pause during the target's SELL strands us in it.
+    if (market.closed) return done('exit_dropped_market_closed');
     const mg = marketGate(market, 'sell', cfg.copy, this.now());
-    if (!mg.ok) return done('exit_dropped_market', { reason: mg.reason }); // resolved or halted: settlement takes it from here
+    if (!mg.ok) return retry('exit_retry_market_paused', { reason: mg.reason });
     const bg = bookGate(book, 'sell', cfg.copy);
     if (!bg.ok) return retry('exit_retry_no_bids');
     const bid = book.bids[0]!.price;
@@ -293,7 +300,7 @@ export class CopyEngine {
     }
 
     const key = `sell|${exit.eventId}|${exit.attempts}`;
-    this.commitOrder(null, { key, side: 'sell', orderId: null, target, tokenId, conditionId: held.conditionId, question: held.question, outcome: held.outcome, sentAt: this.now(), attempts: 0, nextAt: this.now() + this.recheckDelay(0) },
+    this.commitOrder(null, { key, side: 'sell', orderId: null, target, tokenId, conditionId: held.conditionId, question: held.question, outcome: held.outcome, shares: shares.toString(), limit: clampLimit(bid, book.tickSize).toString(), reserveUsdc: '0', sentAt: this.now(), attempts: 0, nextAt: this.now() + this.recheckDelay(0) },
       { ...base, decision: 'sell_submitted', limit: fromMicro(bid), shares: fromMicro(shares) });
     const r = await exchange.sellFak(tokenId, held.conditionId, bid, shares);
     const costOfSold = (BigInt(held.costUsdc) * r.shares) / BigInt(held.shares);
@@ -317,11 +324,23 @@ export class CopyEngine {
         let f: TradeFill;
         try {
           f = await exchange.fillsOf(p.orderId, p.conditionId, p.orderId ? p.sentAt - 30_000 : p.sentAt - 5_000,
-            { tokenId: p.tokenId, side: p.side, isBooked: (id) => state.isBooked(id) });
+            { tokenId: p.tokenId, side: p.side, shares: BigInt(p.shares), limit: BigInt(p.limit), isBooked: (id) => state.isBooked(id) });
         } catch (e) {
           if (now - p.sentAt > RECHECK_GIVE_UP_MS) {
             state.removePendingOrder(p.key);
             this.record({ eventId: `recheck:${p.key}`, target: p.target, decision: 'order_unverified', side: p.side, orderId: p.orderId, tokenId: p.tokenId, reason: (e as Error).message.slice(0, 200) }, 'error');
+          } else {
+            state.updatePendingOrder(p.key, { attempts: p.attempts + 1, nextAt: now + this.recheckDelay(p.attempts + 1) });
+            state.save();
+          }
+          continue;
+        }
+        if (f.ambiguous) {
+          // several orders could be ours: booking any of them could book a manual trade. Keep the
+          // reservation and ask a human once it is clear the ambiguity will not resolve itself.
+          if (p.attempts + 1 >= RECHECK_ATTEMPTS && now - p.sentAt >= RECHECK_MIN_AGE_MS) {
+            state.removePendingOrder(p.key);
+            this.record({ eventId: `recheck:${p.key}`, target: p.target, decision: 'order_needs_reconcile', side: p.side, tokenId: p.tokenId, reason: 'more than one unattributed order matches what was sent' }, 'error');
           } else {
             state.updatePendingOrder(p.key, { attempts: p.attempts + 1, nextAt: now + this.recheckDelay(p.attempts + 1) });
             state.save();
