@@ -126,7 +126,13 @@ async function check(path: string): Promise<number> {
       problems++;
     }
     if (usdc > 0n && usdc < toMicro(cfg.copy.orderSizeUsdc)) { bad(`balance is below one order (copy.orderSizeUsdc = $${cfg.copy.orderSizeUsdc})`); problems++; }
-  } catch (e) { bad(`balance lookup failed: ${(e as Error).message}`); problems++; }
+  } catch (e) {
+    const msg = (e as Error).message;
+    // Polymarket's answer when the funder is not a Deposit Wallet owned by this key
+    if (/no deposit wallet found/i.test(msg)) bad(`Polymarket finds no account wallet at ${cfg.polymarket.funderAddress} owned by this key — funderAddress, privateKey or signatureType is wrong`);
+    else bad(`balance lookup failed: ${msg}`);
+    problems++;
+  }
   try {
     if (await gw.closedOnly()) { bad('Polymarket lets this account only close positions (region or account restriction): BUYs will be rejected'); problems++; }
     else ok('account may open positions');
