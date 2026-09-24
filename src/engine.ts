@@ -246,6 +246,7 @@ export class CopyEngine {
       const { state } = this.o;
       const p = state.pendingOrders().find((x) => x.key === key);
       if (!p) throw new Error(`no pending order ${key}`);
+      if (result) validateReconcile(p, result);
       state.removePendingOrder(key);
       if (result && result.shares > 0n) this.book(p, { shares: result.shares, usdc: result.usdc, feeUsdc: 0n, feeShares: 0n, orderIds: p.orderId ? [p.orderId] : [] });
       this.record({ eventId: `reconcile:${key}`, target: p.target, decision: 'reconciled', side: p.side, tokenId: p.tokenId, filled: result ? fromMicro(result.shares) : 0, usdc: result ? fmtUsd(result.usdc) : '$0.00' });
@@ -255,6 +256,8 @@ export class CopyEngine {
   /** Apply a fill to the books. BUY fees are taken in shares, so the position is what actually landed. */
   private book(p: PendingOrder, f: TradeFill): void {
     const { state } = this.o;
+    // inventory on this outcome just changed: earlier "nothing there" readings no longer count
+    state.updatePendingExit(p.target, p.tokenId, { lowBalanceReads: 0, lowBalanceSince: null });
     for (const id of f.orderIds) if (id) state.markBooked(id);
     if (p.side === 'buy') {
       state.addBuy({ target: p.target, tokenId: p.tokenId, conditionId: p.conditionId, question: p.question, outcome: p.outcome }, f.shares - f.feeShares, f.usdc);
@@ -280,8 +283,12 @@ export class CopyEngine {
     const { cfg, state, exchange, log } = this.o;
     const { target, tokenId } = exit;
     const base = { eventId: exit.eventId, target, tokenId, side: 'SELL' };
-    const retry = (decision: string, extra: Record<string, unknown> = {}) => {
-      state.updatePendingExit(target, tokenId, { attempts: exit.attempts + 1, nextAt: this.now() + this.exitDelay(exit.attempts) });
+    // every retry except a low-balance reading breaks the run of low readings
+    const retry = (decision: string, extra: Record<string, unknown> = {}, lowRun?: { reads: number; since: number }) => {
+      state.updatePendingExit(target, tokenId, {
+        attempts: exit.attempts + 1, nextAt: this.now() + this.exitDelay(exit.attempts),
+        lowBalanceReads: lowRun?.reads ?? 0, lowBalanceSince: lowRun?.since ?? null,
+      });
       this.record({ ...base, decision, attempt: exit.attempts + 1, ...extra }, 'warn');
     };
     const done = (decision: string, extra: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') => {
@@ -336,9 +343,14 @@ export class CopyEngine {
     if (shares <= 0n) {
       // The balance endpoint can lag a fill we have just booked (a late BUY, a fresh reconcile). One
       // reading of "not there" is not proof: retry, and only give up once it has held for a while.
-      const settled = exit.attempts + 1 >= BALANCE_CONFIRM_ATTEMPTS && this.now() - exit.firstAt >= BALANCE_CONFIRM_MS;
-      if (!settled || this.pendingBuy(target, tokenId)) {
-        return retry(balance === 0n ? 'exit_retry_zero_balance' : 'exit_retry_balance_short', { balance: fromMicro(balance), bookedToOthers: fromMicro(others) });
+      if (this.pendingBuy(target, tokenId)) {
+        // inventory on this outcome may still change: this reading proves nothing, start over after
+        return retry('exit_retry_balance_short_buy_pending', { balance: fromMicro(balance), bookedToOthers: fromMicro(others) });
+      }
+      const run = { reads: (exit.lowBalanceReads ?? 0) + 1, since: exit.lowBalanceSince ?? this.now() };
+      const settled = run.reads >= BALANCE_CONFIRM_ATTEMPTS && this.now() - run.since >= BALANCE_CONFIRM_MS;
+      if (!settled) {
+        return retry(balance === 0n ? 'exit_retry_zero_balance' : 'exit_retry_balance_short', { balance: fromMicro(balance), bookedToOthers: fromMicro(others), lowReads: run.reads }, run);
       }
       if (balance === 0n) { state.drop(target, tokenId); return done('exit_no_balance'); }
       log.error('the wallet holds less of this outcome than the books say; not selling shares booked to other targets — reconcile by hand', { target: short(target), tokenId: tokenId.slice(0, 16), balance: fromMicro(balance), bookedToOthers: fromMicro(others) });
@@ -434,6 +446,24 @@ export class CopyEngine {
 
   /** for tests and the status command */
   positions(): Position[] { return this.o.state.positions(); }
+}
+
+/**
+ * What an operator may enter for an order: never more shares than were sent, never a negative amount,
+ * and a price the order could actually have filled at (a BUY at its limit or better, a SELL at its
+ * limit or better), one cent of rounding either way. A wrong entry must not move the books — or the
+ * caps they feed.
+ */
+export function validateReconcile(p: PendingOrder, r: { shares: bigint; usdc: bigint }): void {
+  if (r.shares <= 0n) throw new Error('filled shares must be above 0 (use --none for no fill)');
+  if (r.usdc < 0n) throw new Error('usdc cannot be negative');
+  if (p.shares && r.shares > BigInt(p.shares)) throw new Error(`the order was for ${fromMicro(BigInt(p.shares))} shares; ${fromMicro(r.shares)} cannot have filled`);
+  if (p.limit) {
+    const atLimit = (r.shares * BigInt(p.limit)) / UNIT;
+    const CENT = 10_000n;
+    if (p.side === 'buy' && r.usdc > atLimit + CENT) throw new Error(`${fmtUsd(r.usdc)} for ${fromMicro(r.shares)} shares is above the BUY limit (${fmtUsd(atLimit)} max)`);
+    if (p.side === 'sell' && r.usdc + CENT < atLimit) throw new Error(`${fmtUsd(r.usdc)} for ${fromMicro(r.shares)} shares is below the SELL limit (${fmtUsd(atLimit)} min)`);
+  }
 }
 
 const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;

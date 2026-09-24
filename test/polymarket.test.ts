@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { attributeFills, classifyPost } from '../src/polymarket.js';
+import { PolymarketGateway, attributeFills, classifyPost } from '../src/polymarket.js';
 import { toMicro } from '../src/units.js';
 
 /** the shape the TS SDK hands back for each case (http-helpers errorHandling) */
@@ -42,5 +42,18 @@ describe('attributeFills', () => {
       expect(attributeFills([t], null, SINCE, match()).candidates).toEqual([]);
     }
     expect(attributeFills([T({})], null, SINCE, match({ booked: ['0xa'] })).candidates).toEqual([]);
+  });
+});
+
+describe('tokenBalance', () => {
+  const gw = (update: unknown, balance = '0') => {
+    const g = new PolymarketGateway({ clobUrl: 'http://x', signatureType: 0 }, { info() {}, warn() {}, error() {} });
+    (g as any).clob = { updateBalanceAllowance: async () => { if (update instanceof Error) throw update; return update; }, getBalanceAllowance: async () => ({ balance }) };
+    return g;
+  };
+  it('a failed cache refresh fails the read — a stale 0 must not count as a fresh one', async () => {
+    await expect(gw({ error: 'internal', status: 500 }).tokenBalance('T')).rejects.toThrow(/refresh failed/);
+    await expect(gw(new Error('ECONNRESET')).tokenBalance('T')).rejects.toThrow(/ECONNRESET/);
+    expect(await gw('', '19000000').tokenBalance('T')).toBe(19_000_000n);
   });
 });

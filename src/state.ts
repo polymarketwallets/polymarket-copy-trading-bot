@@ -55,6 +55,13 @@ export interface PendingExit {
   firstAt: number;
   attempts: number;
   nextAt: number;
+  /**
+   * The CURRENT run of successful balance readings that left nothing to sell, and when it started.
+   * Any other observation (enough balance, a failed read, a BUY booked or pending on this outcome)
+   * resets it: only an unbroken run of "really not there" may close the books.
+   */
+  lowBalanceReads?: number;
+  lowBalanceSince?: number | null;
 }
 
 interface Persisted {

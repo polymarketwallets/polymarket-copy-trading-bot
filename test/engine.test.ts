@@ -354,6 +354,32 @@ describe('SELL', () => {
     expect(h.last()).toMatchObject({ decision: 'exit_no_balance' });
   });
 
+  it('other retries do not count as low-balance readings: after 10 min of a paused market, one 0 does not close the books', async () => {
+    const h = setup(LIVE);
+    await h.engine.onFill(fill(), ws);
+    h.ex.market_ = { ...h.ex.market_, acceptingOrders: false };
+    await h.engine.onFill(fill({ side: 'SELL' }), ws);
+    for (let i = 0; i < 6; i++) { h.clock.t += 5 * 60_000; await h.engine.tick(); }   // 30 min, 7 retries
+    h.ex.market_ = { ...h.ex.market_, acceptingOrders: true };
+    h.ex.balance = 0n;                                                               // a single stale 0
+    h.clock.t += 5 * 60_000; await h.engine.tick();
+    expect(h.state.positions().length).toBe(1);
+    expect(h.last()).toMatchObject({ decision: 'exit_retry_zero_balance', lowReads: 1 });
+  });
+
+  it('low readings while a BUY on the outcome is pending never accumulate', async () => {
+    const h = setup(LIVE);
+    await h.engine.onFill(fill(), ws);                                               // 19 booked
+    h.ex.buyResult = () => ({ orderId: 'o2', status: 'none', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'killed', recheck: true });
+    await h.engine.onFill(fill(), ws);                                               // DCA add pending
+    h.ex.balance = 0n;
+    await h.engine.onFill(fill({ side: 'SELL' }), ws);
+    for (let i = 0; i < 6; i++) { h.clock.t += 5 * 60_000; await h.engine.tick(); }
+    // the add resolved as "no fill" somewhere in there; the run of low readings only started afterwards
+    expect(h.state.positions().length).toBe(1);
+    expect(h.decisions().some((d) => d.decision === 'exit_retry_balance_short_buy_pending')).toBe(true);
+  });
+
   it('a transient failure before the order is retried until the exit happens', async () => {
     const h = setup(LIVE);
     await h.engine.onFill(fill(), ws);
@@ -476,6 +502,23 @@ describe('SELL', () => {
     await h.engine.onFill(fill(), ws);
     await h.engine.onFill(fill({ side: 'SELL' }), ws);
     expect(h.last().decision).toBe('skipped_sell_mode_none');
+  });
+});
+
+describe('reconcile input', () => {
+  it('refuses amounts the order could not have produced, and keeps the reservation', async () => {
+    const h = setup(LIVE);
+    h.ex.buyResult = () => ({ orderId: '', status: 'unknown', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'post_error', recheck: true });
+    await h.engine.onFill(fill(), ws);                         // 19 shares at limit 0.51 → at most $9.69
+    const key = h.state.pendingOrders()[0]!.key;
+    await expect(h.engine.reconcile(key, { shares: 19_000_000n, usdc: -100_000_000n })).rejects.toThrow(/negative/);
+    await expect(h.engine.reconcile(key, { shares: 20_000_000n, usdc: 9_000_000n })).rejects.toThrow(/was for 19/);
+    await expect(h.engine.reconcile(key, { shares: 19_000_000n, usdc: 12_000_000n })).rejects.toThrow(/above the BUY limit/);
+    await expect(h.engine.reconcile(key, { shares: 0n, usdc: 0n })).rejects.toThrow(/above 0/);
+    expect(h.state.pendingOrders().length).toBe(1);
+    expect(h.state.reservedUsdc()).toBe(9_690_000n);
+    await h.engine.reconcile(key, { shares: 19_000_000n, usdc: 9_690_000n });
+    expect(h.state.pendingOrders()).toEqual([]);
   });
 });
 
