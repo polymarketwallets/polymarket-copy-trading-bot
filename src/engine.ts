@@ -145,6 +145,7 @@ export class CopyEngine {
     const held = state.position(target, fill.tokenId);
     const maxBuys = tcfg?.maxBuysPerOutcome ?? cfg.copy.maxBuysPerOutcome;
     if (held && held.buyCount >= maxBuys) return this.decide(base, 'skipped_max_buys_per_outcome', { buyCount: held.buyCount });
+    if (state.hasUnknownReservation()) return this.decide(base, 'skipped_reconcile_required');
     // an order still being confirmed on this outcome counts as open: buying again could double up
     if (state.pendingOrders().some((p) => p.target === target && p.tokenId === fill.tokenId && p.side === 'buy')) {
       return this.decide(base, 'skipped_order_unconfirmed');
@@ -219,6 +220,27 @@ export class CopyEngine {
     // none / unknown: it may still have filled — keep the record, tick() will find out
     state.updatePendingOrder(key, { orderId: r.orderId || null });
     this.record({ ...base, decision: p.side === 'buy' ? 'buy_unconfirmed' : 'sell_unconfirmed', orderId: r.orderId || null, reason: r.reason }, r.status === 'unknown' ? 'warn' : 'info');
+  }
+
+  /** Hand an order to a human. It stays pending — reservation and all — until `reconcile()`. */
+  private needsReconcile(p: PendingOrder, reason: string): void {
+    this.o.state.updatePendingOrder(p.key, { needsReconcile: reason });
+    this.record({ eventId: `recheck:${p.key}`, target: p.target, decision: 'order_needs_reconcile', side: p.side, orderId: p.orderId, tokenId: p.tokenId, key: p.key, reason }, 'error');
+  }
+
+  /**
+   * The operator's verdict on an order the bot could not settle: `null` = it did not fill; otherwise
+   * the shares and USDC it filled for (read them off polymarket.com). Releases the reservation.
+   */
+  reconcile(key: string, result: { shares: bigint; usdc: bigint } | null): Promise<void> {
+    return this.serial(async () => {
+      const { state } = this.o;
+      const p = state.pendingOrders().find((x) => x.key === key);
+      if (!p) throw new Error(`no pending order ${key}`);
+      state.removePendingOrder(key);
+      if (result && result.shares > 0n) this.book(p, { shares: result.shares, usdc: result.usdc, feeUsdc: 0n, feeShares: 0n, orderIds: p.orderId ? [p.orderId] : [] });
+      this.record({ eventId: `reconcile:${key}`, target: p.target, decision: 'reconciled', side: p.side, tokenId: p.tokenId, filled: result ? fromMicro(result.shares) : 0, usdc: result ? fmtUsd(result.usdc) : '$0.00' });
+    });
   }
 
   /** Apply a fill to the books. BUY fees are taken in shares, so the position is what actually landed. */
@@ -320,15 +342,14 @@ export class CopyEngine {
       const { state, exchange } = this.o;
       const now = this.now();
       for (const p of [...state.pendingOrders()]) {
-        if (p.nextAt > now) continue;
+        if (p.needsReconcile || p.nextAt > now) continue;
         let f: TradeFill;
         try {
           f = await exchange.fillsOf(p.orderId, p.conditionId, p.orderId ? p.sentAt - 30_000 : p.sentAt - 5_000,
             { tokenId: p.tokenId, side: p.side, shares: BigInt(p.shares), limit: BigInt(p.limit), isBooked: (id) => state.isBooked(id) });
         } catch (e) {
           if (now - p.sentAt > RECHECK_GIVE_UP_MS) {
-            state.removePendingOrder(p.key);
-            this.record({ eventId: `recheck:${p.key}`, target: p.target, decision: 'order_unverified', side: p.side, orderId: p.orderId, tokenId: p.tokenId, reason: (e as Error).message.slice(0, 200) }, 'error');
+            this.needsReconcile(p, `could not look the order up for a day: ${(e as Error).message.slice(0, 160)}`);
           } else {
             state.updatePendingOrder(p.key, { attempts: p.attempts + 1, nextAt: now + this.recheckDelay(p.attempts + 1) });
             state.save();
@@ -339,8 +360,7 @@ export class CopyEngine {
           // several orders could be ours: booking any of them could book a manual trade. Keep the
           // reservation and ask a human once it is clear the ambiguity will not resolve itself.
           if (p.attempts + 1 >= RECHECK_ATTEMPTS && now - p.sentAt >= RECHECK_MIN_AGE_MS) {
-            state.removePendingOrder(p.key);
-            this.record({ eventId: `recheck:${p.key}`, target: p.target, decision: 'order_needs_reconcile', side: p.side, tokenId: p.tokenId, reason: 'more than one unattributed order matches what was sent' }, 'error');
+            this.needsReconcile(p, 'more than one unattributed order matches what was sent');
           } else {
             state.updatePendingOrder(p.key, { attempts: p.attempts + 1, nextAt: now + this.recheckDelay(p.attempts + 1) });
             state.save();

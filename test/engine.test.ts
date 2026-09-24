@@ -67,6 +67,8 @@ function setup(raw: Record<string, any> = {}, targets: string[] | null = null) {
   return { cfg, ex, state, engine, dir, decisions, last, kinds, clock, restart };
 }
 const replay = { source: 'replay' as const };
+/** a feed timestamp a few seconds before `ms` */
+const tsAt = (ms: number) => new Date(ms - 5_000).toISOString().replace('T', ' ').slice(0, 19);
 const ws = { source: 'ws' as const };
 
 describe('BUY', () => {
@@ -189,14 +191,42 @@ describe('orders whose result is not known', () => {
     expect(g.kinds().at(-1)).toBe('skipped_position_cap');
   });
 
-  it('an ambiguous match is never booked; it is handed to a human after 5 minutes', async () => {
-    const h = setup(LIVE);
+  it('an ambiguous match is never booked; after 5 minutes it waits for a human — still holding its reservation', async () => {
+    const h = setup({ ...LIVE, risk: { maxDailySpendUsdc: 15 } });
     h.ex.buyResult = () => ({ orderId: '', status: 'unknown', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'post_error', recheck: true });
     await h.engine.onFill(fill(), ws);
     h.ex.lateFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [], ambiguous: true };
-    for (let i = 0; i < 20 && h.state.pendingOrders().length; i++) { h.clock.t += 60_000; await h.engine.tick(); }
+    for (let i = 0; i < 20; i++) { h.clock.t += 60_000; await h.engine.tick(); }
     expect(h.state.positions()).toEqual([]);
-    expect(h.last()).toMatchObject({ decision: 'order_needs_reconcile' });
+    expect(h.decisions().filter((d) => d.decision === 'order_needs_reconcile').length).toBe(1);
+    const [p] = h.state.pendingOrders();
+    expect(p!.needsReconcile).toMatch(/more than one/);
+    // the $9.69 it may have spent still counts: another $10 BUY would break the $15 cap
+    h.ex.buyResult = (shares, limit) => ({ orderId: 'o2', status: 'filled', shares, usdc: (shares * limit) / 1_000_000n, feeUsdc: 0n, netShares: shares });
+    await h.engine.onFill(fill({ tokenId: 'TOK2', ts: tsAt(h.clock.t) }), ws);
+    expect(h.last().decision).toBe('skipped_daily_spend_cap');
+    // the operator checks polymarket.com: it did fill
+    await h.engine.reconcile(p!.key, { shares: 19_000_000n, usdc: 9_690_000n });
+    expect(h.state.pendingOrders()).toEqual([]);
+    expect(h.state.position(T1, 'TOK')!.shares).toBe('19000000');
+    expect(h.last()).toMatchObject({ decision: 'reconciled', filled: 19 });
+  });
+
+  it('a pending order from a build that did not record its size fails closed: no new BUY until reconciled', async () => {
+    const h = setup(LIVE);
+    writeFileSync(h.state.file, JSON.stringify({ version: 1, positions: {}, processed: [], handledTx: [], spend: { day: '', usdc: '0' },
+      pendingOrders: [{ key: 'buy|old', side: 'buy', orderId: null, target: T1, tokenId: 'TOK', conditionId: 'CID', sentAt: NOW, attempts: 0, nextAt: NOW }], pendingExits: [], bookedOrderIds: [] }));
+    const again = h.restart();
+    const st = new BotState(h.dir, 'live');
+    expect(st.pendingOrders()[0]!.needsReconcile).toMatch(/older build/);
+    await again.onFill(fill({ tokenId: 'TOK2' }), ws);
+    expect(h.last().decision).toBe('skipped_reconcile_required');
+    h.clock.t += 60 * 60_000;
+    await again.tick();
+    expect(h.ex.fillsCalls).toEqual([]); // never looked up with a made-up size, never dropped
+    await again.reconcile('buy|old', null);
+    await again.onFill(fill({ ts: tsAt(h.clock.t) }), ws);
+    expect(h.last().decision).toBe('bought');
   });
 
   it('a "killed" order that did fill is booked by tick() — even after a restart', async () => {

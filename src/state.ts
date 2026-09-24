@@ -39,6 +39,12 @@ export interface PendingOrder {
   sentAt: number;
   attempts: number;
   nextAt: number;
+  /**
+   * Set when the bot cannot establish the outcome by itself (several candidate orders, lookups failing
+   * for a day, a record from an older build). The order may still have filled, so it KEEPS its
+   * reservation and keeps blocking its outcome until `pmwallets-copytrade reconcile` settles it.
+   */
+  needsReconcile?: string;
 }
 
 /** A target exited and we still have to: retried until the position is gone. */
@@ -95,6 +101,10 @@ export class BotState {
       pendingExits: d.pendingExits ?? [],
       bookedOrderIds: d.bookedOrderIds ?? [],
     };
+    // fail closed on a record that lacks what the reconciliation needs: never read a missing amount as 0
+    this.data.pendingOrders = this.data.pendingOrders.map((p) =>
+      p.needsReconcile || (p.shares && p.limit && p.reserveUsdc !== undefined) ? p
+        : { ...p, needsReconcile: 'written by an older build: the size and limit that were sent are unknown' });
     for (const id of this.data.processed) this.processed.add(id);
     for (const k of this.data.handledTx) this.handledTx.add(k);
     for (const k of this.data.bookedOrderIds) this.booked.add(k);
@@ -169,8 +179,12 @@ export class BotState {
   /** USDC reserved by BUYs whose outcome is not known yet */
   reservedUsdc(): bigint {
     let n = 0n;
-    for (const p of this.data.pendingOrders) if (p.side === 'buy') n += BigInt(p.reserveUsdc || '0');
+    for (const p of this.data.pendingOrders) if (p.side === 'buy' && p.reserveUsdc) n += BigInt(p.reserveUsdc);
     return n;
+  }
+  /** a BUY whose reservation is unknown: the caps cannot be computed, so no new BUY may go out */
+  hasUnknownReservation(): boolean {
+    return this.data.pendingOrders.some((p) => p.side === 'buy' && !p.reserveUsdc);
   }
   /** (target, token) pairs that are open or may be about to be: booked positions plus unconfirmed BUYs */
   openOutcomes(): { target: string; tokenId: string }[] {
