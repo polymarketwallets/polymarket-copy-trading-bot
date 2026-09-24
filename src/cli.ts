@@ -6,7 +6,8 @@ import { checkTradingConfig, loadConfig } from './config.js';
 import { PmwClient } from 'pmwallets';
 import { applyProxyFromEnv } from './proxy.js';
 import { consoleLogger } from './log.js';
-import { run } from './run.js';
+import { funderMismatch, run } from './run.js';
+import { checkFunder } from './wallets.js';
 import { BotState, InstanceLock } from './state.js';
 import { CopyEngine } from './engine.js';
 import { PolymarketGateway } from './polymarket.js';
@@ -117,9 +118,20 @@ async function check(path: string): Promise<number> {
   const gw = new PolymarketGateway(cfg.polymarket, { info() {}, warn() {}, error: (m: string) => console.error(m) });
   try { await gw.connect(); } catch (e) { bad(`could not derive the trading credentials: ${(e as Error).message}`); return problems + 1; }
   ok(`signer ${gw.signerAddress}`);
-  ok(`funds held by ${cfg.polymarket.funderAddress ?? gw.signerAddress}`);
+  const fc = checkFunder(gw.signerAddress as `0x${string}`, cfg.polymarket.funderAddress, type);
+  if (fc.ok) ok(`funds held by ${cfg.polymarket.funderAddress ?? gw.signerAddress} — this key's ${ACCOUNT_TYPES[type]!.split(' (')[0]}`);
+  else { bad(funderMismatch(cfg.polymarket.funderAddress, type, fc)); problems++; }
   try {
-    const usdc = await gw.collateralBalance();
+    const { balance: usdc, allowances } = await gw.collateral();
+    const spenders = Object.entries(allowances);
+    const zero = spenders.filter(([, v]) => v === 0n).map(([k]) => k);
+    if (spenders.length && zero.length === spenders.length) {
+      bad(type === 0
+        ? 'no exchange contract may spend this wallet\'s USDC yet: approve them before the first trade (see the README)'
+        : 'no exchange contract may spend this account\'s USDC: finish setting up trading on polymarket.com (make one trade or deposit there) first');
+      problems++;
+    } else if (zero.length) console.log(`  ! no approval yet for ${zero.join(', ')} — orders routed through it will fail`);
+    else if (spenders.length) ok('exchange approvals in place');
     if (usdc > 0n) ok(`balance ${fmtUsd(usdc)} available to trade`);
     else {
       bad('balance $0.00 — if polymarket.com shows money in this account, signatureType or funderAddress is wrong');
@@ -129,7 +141,11 @@ async function check(path: string): Promise<number> {
   } catch (e) {
     const msg = (e as Error).message;
     // Polymarket's answer when the funder is not a Deposit Wallet owned by this key
-    if (/no deposit wallet found/i.test(msg)) bad(`Polymarket finds no account wallet at ${cfg.polymarket.funderAddress} owned by this key — funderAddress, privateKey or signatureType is wrong`);
+    if (/no deposit wallet found/i.test(msg)) {
+      bad(fc.ok
+        ? `this key's Deposit Wallet ${cfg.polymarket.funderAddress} is not deployed yet: sign up on polymarket.com with this wallet and make a deposit first`
+        : `Polymarket finds no account wallet at ${cfg.polymarket.funderAddress} owned by this key — funderAddress, privateKey or signatureType is wrong`);
+    }
     else bad(`balance lookup failed: ${msg}`);
     problems++;
   }
@@ -137,7 +153,6 @@ async function check(path: string): Promise<number> {
     if (await gw.closedOnly()) { bad('Polymarket lets this account only close positions (region or account restriction): BUYs will be rejected'); problems++; }
     else ok('account may open positions');
   } catch (e) { bad(`restriction lookup failed: ${(e as Error).message}`); problems++; }
-  if (type === 0) console.log('  ! a plain wallet must approve the exchange contracts itself before its first trade (see the README)');
 
   console.log(problems ? `\n${problems} problem(s): fix them before mode: live` : `\nready for mode: live (the bot is in ${cfg.mode} mode now)`);
   return problems ? 1 : 0;

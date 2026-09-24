@@ -328,6 +328,19 @@ export class PolymarketGateway {
     return r?.balance ? (String(r.balance).includes('.') ? toMicro(r.balance) : BigInt(r.balance)) : 0n;
   }
 
+  /** USDC balance plus the exchange approvals the CLOB sees for it (spender → allowance, 1e-6). */
+  async collateral(): Promise<{ balance: bigint; allowances: Record<string, bigint> }> {
+    const clob = this.requireClob();
+    const upd: any = await clob.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+    if (upd && typeof upd === 'object' && (upd.error || upd.errorMsg)) throw new Error(`balance refresh failed: ${String(upd.errorMsg || upd.error).slice(0, 200)}`);
+    const r: any = await clob.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+    if (r?.error || r?.errorMsg) throw new Error(String(r.errorMsg || r.error));
+    const amount = (v: unknown) => { const t = String(v ?? '0'); return t.includes('.') ? toMicro(t) : BigInt(t || '0'); };
+    const allowances: Record<string, bigint> = {};
+    for (const [k, v] of Object.entries(r?.allowances ?? {})) allowances[k] = amount(v);
+    return { balance: amount(r?.balance), allowances };
+  }
+
   /** USDC available to trade (1e-6). */
   async collateralBalance(): Promise<bigint> {
     const r: any = await this.requireClob().getBalanceAllowance({ asset_type: AssetType.COLLATERAL });

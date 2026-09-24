@@ -118,6 +118,16 @@ function int(v: unknown, path: string, min: number, max: number): number {
   return n;
 }
 
+/**
+ * A list option. Missing → empty list. Present but empty (`targets:` with nothing under it) is refused:
+ * an empty `targets` means "copy every subscription", which is not something to arrive at by accident.
+ */
+function listOf(v: unknown, path: string): unknown[] {
+  if (v === undefined || v === null) return [];
+  if (Array.isArray(v)) return v;
+  throw new Error(`${path} must be a list — write ${path}: [] for none`);
+}
+
 /** Merge onto the defaults and validate. Fail loud on anything that would make the bot trade wrong. */
 export function buildConfig(raw: Record<string, any>): Config {
   const copyRaw = raw['copy'] ?? {};
@@ -126,11 +136,12 @@ export function buildConfig(raw: Record<string, any>): Config {
     mode: raw['mode'] ?? DEFAULTS.mode,
     pmwallets: { apiKey: raw['pmwallets']?.apiKey, baseUrl: raw['pmwallets']?.baseUrl ?? 'https://api.pmwallets.com' },
     polymarket: { ...DEFAULTS.polymarket, ...(raw['polymarket'] ?? {}) },
-    targets: (raw['targets'] ?? []).map((t: unknown) => (typeof t === 'string' ? { entity: t } : t)),
+    targets: listOf(raw['targets'], 'targets').map((t: unknown) => (typeof t === 'string' ? { entity: t } : t)) as TargetConfig[],
     copy,
     risk: { ...DEFAULTS.risk, ...(raw['risk'] ?? {}) },
     dataDir: raw['dataDir'] ?? DEFAULTS.dataDir,
   };
+  if (typeof c.dataDir !== 'string' || !c.dataDir.trim()) throw new Error('dataDir is empty: remove the line to use ./pmw-data, or give a directory');
 
   if (c.mode !== 'dry-run' && c.mode !== 'live') throw new Error(`mode must be dry-run or live, got ${JSON.stringify(c.mode)}`);
   if (!c.pmwallets.apiKey || !/^pmw_/.test(c.pmwallets.apiKey)) throw new Error('pmwallets.apiKey is required (pmw_…, from https://pmwallets.com/keys)');

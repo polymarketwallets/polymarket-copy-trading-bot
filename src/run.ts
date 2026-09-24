@@ -4,6 +4,7 @@ import type { Config, TargetConfig } from './config.js';
 import { CopyEngine } from './engine.js';
 import type { Logger } from './log.js';
 import { PolymarketGateway } from './polymarket.js';
+import { checkFunder } from './wallets.js';
 import { applyProxyFromEnv } from './proxy.js';
 import { BotState, InstanceLock } from './state.js';
 import { fmtUsd, toMicro } from './units.js';
@@ -66,6 +67,10 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
 
   if (cfg.mode === 'live') {
     await exchange.connect();
+    // the funder must be the account this key controls as this type: otherwise every order is rejected,
+    // or — worse — it trades from an account the user did not mean
+    const fc = checkFunder(exchange.signerAddress as `0x${string}`, cfg.polymarket.funderAddress, cfg.polymarket.signatureType!);
+    if (!fc.ok) throw new Error(funderMismatch(cfg.polymarket.funderAddress, cfg.polymarket.signatureType!, fc));
     const usdc = await exchange.collateralBalance();
     log.info('polymarket balance', { usdc: fmtUsd(usdc) });
     if (usdc < toMicro(cfg.copy.orderSizeUsdc)) log.warn('balance is below one order: BUYs will be rejected until you deposit');
@@ -113,4 +118,13 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
   }
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
+}
+
+const TYPE_NAMES = ['plain wallet (0)', 'Proxy Wallet (1)', 'Safe Wallet (2)', 'Deposit Wallet (3)'];
+
+/** one explanation of a wrong funder, shared by `run` and `check` */
+export function funderMismatch(funder: string | undefined, type: number, fc: { expected: string[]; actualType: number | null }): string {
+  if (fc.actualType !== null) return `funderAddress ${funder} is this key's ${TYPE_NAMES[fc.actualType]}, but signatureType is ${type}: set signatureType: ${fc.actualType}`;
+  return `funderAddress ${funder ?? '(none)'} is not an account wallet of this private key. As a ${TYPE_NAMES[type]} this key's account is ${fc.expected.join(' or ')}. `
+    + 'Check that the key is the one you sign in to polymarket.com with (Session Keys are not supported yet).';
 }

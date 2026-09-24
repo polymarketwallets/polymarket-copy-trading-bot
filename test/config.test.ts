@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildConfig, substituteEnv } from '../src/config.js';
 
@@ -50,5 +53,14 @@ describe('the shared config contract (the Python suite checks the same file)', (
     const expected = JSON.parse(readFileSync(new URL('config-contract.expected.json', root), 'utf8'));
     const got = { mode: c.mode, polymarket: c.polymarket, targets: c.targets, copy: c.copy, risk: c.risk, dataDir: c.dataDir };
     expect(JSON.parse(JSON.stringify(got))).toEqual(expected);
+  });
+});
+
+describe('configs both implementations refuse (shared testdata/config-invalid.json)', () => {
+  it.each(JSON.parse(readFileSync(new URL('../testdata/config-invalid.json', import.meta.url), 'utf8')).cases as { name: string; yaml: string }[])('$name', async ({ yaml }) => {
+    const { loadConfig } = await import('../src/config.js');
+    const dir = mkdtempSync(join(tmpdir(), 'pmwcfg-'));
+    writeFileSync(join(dir, 'c.yaml'), yaml);
+    expect(() => loadConfig(join(dir, 'c.yaml'), {})).toThrow();
   });
 });
