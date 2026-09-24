@@ -15,7 +15,7 @@ function sdkShape(http: number | null, body: unknown): unknown {
 }
 
 describe('classifyPost (shared contract with the Python bot)', () => {
-  const { cases } = JSON.parse(readFileSync(new URL('../../../testdata/post-classification.json', import.meta.url), 'utf8'));
+  const { cases } = JSON.parse(readFileSync(new URL('../testdata/post-classification.json', import.meta.url), 'utf8'));
   for (const c of cases) it(c.name, () => expect(classifyPost(sdkShape(c.http, c.body))).toBe(c.expect));
 });
 

@@ -35,7 +35,7 @@ describe('the shared config contract (the Python suite checks the same file)', (
   it('normalises every YAML scalar form to the same values', async () => {
     const { loadConfig } = await import('../src/config.js');
     const { readFileSync } = await import('node:fs');
-    const root = new URL('../../../testdata/', import.meta.url);
+    const root = new URL('../testdata/', import.meta.url);
     const c = loadConfig(new URL('config-contract.yaml', root).pathname, {});
     const expected = JSON.parse(readFileSync(new URL('config-contract.expected.json', root), 'utf8'));
     const got = { mode: c.mode, polymarket: c.polymarket, targets: c.targets, copy: c.copy, risk: c.risk, dataDir: c.dataDir };

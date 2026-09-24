@@ -11,7 +11,8 @@
   "files": [
     "dist",
     "config.example.yaml",
-    "README.md"
+    "README.md",
+    "README.zh.md"
   ],
   "engines": {
     "node": ">=20"
@@ -45,5 +46,12 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
     "vitest": "^3.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/polymarketwallets/polymarket-copy-trading-bot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/polymarketwallets/polymarket-copy-trading-bot/issues"
   }
 }
