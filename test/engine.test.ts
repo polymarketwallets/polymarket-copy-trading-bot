@@ -320,8 +320,38 @@ describe('SELL', () => {
     await h.engine.onFill(fill({ entityId: T2 }), ws);
     h.ex.balance = 19_000_000n;
     await h.engine.onFill(fill({ entityId: T1, side: 'SELL' }), ws);
+    expect(h.last()).toMatchObject({ decision: 'exit_retry_balance_short' }); // could be a lagging balance
+    for (let i = 0; i < 10 && h.state.pendingExits().length; i++) { h.clock.t += 5 * 60_000; await h.engine.tick(); }
     expect(h.ex.sells).toEqual([]);
     expect(h.last()).toMatchObject({ decision: 'exit_blocked_reconcile' });
+  });
+
+  it('a balance that reads 0 right after a late fill is booked is not taken as "nothing to sell"', async () => {
+    const h = setup(LIVE);
+    h.ex.buyResult = () => ({ orderId: 'o9', status: 'none', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'killed', recheck: true });
+    await h.engine.onFill(fill(), ws);
+    await h.engine.onFill(fill({ side: 'SELL' }), ws);
+    h.ex.lateFill = { shares: 19_000_000n, usdc: 9_690_000n, feeUsdc: 0n, feeShares: 0n, orderIds: ['o9'] };
+    h.ex.balance = 0n;                                        // the balance endpoint has not caught up
+    h.clock.t += 1_000; await h.engine.tick();                 // books the late BUY, exit sees 0
+    expect(h.state.position(T1, 'TOK')!.shares).toBe('19000000');
+    expect(h.state.pendingExits().length).toBe(1);
+    const again = h.restart();                                 // …and it survives a restart
+    h.ex.balance = 19_000_000n;
+    h.clock.t += 5_000; await again.tick();
+    expect(h.ex.sells).toEqual([{ limit: toMicro('0.49'), shares: 19_000_000n }]);
+    expect(new BotState(h.dir, 'live').positions()).toEqual([]);
+  });
+
+  it('a zero balance that persists for 10 minutes finally closes the books', async () => {
+    const h = setup(LIVE);
+    await h.engine.onFill(fill(), ws);
+    h.ex.balance = 0n;
+    await h.engine.onFill(fill({ side: 'SELL' }), ws);
+    expect(h.state.positions().length).toBe(1);
+    for (let i = 0; i < 10 && h.state.pendingExits().length; i++) { h.clock.t += 5 * 60_000; await h.engine.tick(); }
+    expect(h.state.positions()).toEqual([]);
+    expect(h.last()).toMatchObject({ decision: 'exit_no_balance' });
   });
 
   it('a transient failure before the order is retried until the exit happens', async () => {

@@ -37,6 +37,9 @@ type Base = Record<string, unknown> & { eventId: string; target: string };
 /** an unconfirmed order that stays unmatched after this many lookups (and 5 minutes) had no fill */
 const RECHECK_ATTEMPTS = 5;
 const RECHECK_MIN_AGE_MS = 5 * 60_000;
+/** a balance too low to sell must hold for this many readings and this long before the exit gives up */
+const BALANCE_CONFIRM_ATTEMPTS = 5;
+const BALANCE_CONFIRM_MS = 10 * 60_000;
 /** an order that cannot be looked up for a day is surrendered to the operator */
 const RECHECK_GIVE_UP_MS = 24 * 3600_000;
 
@@ -331,6 +334,12 @@ export class CopyEngine {
     const available = balance - others;
     if (available < shares) shares = available > 0n ? available : 0n;
     if (shares <= 0n) {
+      // The balance endpoint can lag a fill we have just booked (a late BUY, a fresh reconcile). One
+      // reading of "not there" is not proof: retry, and only give up once it has held for a while.
+      const settled = exit.attempts + 1 >= BALANCE_CONFIRM_ATTEMPTS && this.now() - exit.firstAt >= BALANCE_CONFIRM_MS;
+      if (!settled || this.pendingBuy(target, tokenId)) {
+        return retry(balance === 0n ? 'exit_retry_zero_balance' : 'exit_retry_balance_short', { balance: fromMicro(balance), bookedToOthers: fromMicro(others) });
+      }
       if (balance === 0n) { state.drop(target, tokenId); return done('exit_no_balance'); }
       log.error('the wallet holds less of this outcome than the books say; not selling shares booked to other targets — reconcile by hand', { target: short(target), tokenId: tokenId.slice(0, 16), balance: fromMicro(balance), bookedToOthers: fromMicro(others) });
       return done('exit_blocked_reconcile', { balance: fromMicro(balance), bookedToOthers: fromMicro(others) }, 'error');

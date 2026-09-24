@@ -306,7 +306,10 @@ export class PolymarketGateway {
 
   /** Outcome-token balance of the trading account (1e-6 shares). */
   async tokenBalance(tokenId: string): Promise<bigint> {
-    const r: any = await this.requireClob().getBalanceAllowance({ asset_type: AssetType.CONDITIONAL, token_id: tokenId });
+    const clob = this.requireClob();
+    // the CLOB caches balances server-side; ask it to re-read the chain first (best effort)
+    try { await clob.updateBalanceAllowance({ asset_type: AssetType.CONDITIONAL, token_id: tokenId }); } catch { /* read what it has */ }
+    const r: any = await clob.getBalanceAllowance({ asset_type: AssetType.CONDITIONAL, token_id: tokenId });
     if (r?.error || r?.errorMsg) throw new Error(String(r.errorMsg || r.error));
     return r?.balance ? (String(r.balance).includes('.') ? toMicro(r.balance) : BigInt(r.balance)) : 0n;
   }
