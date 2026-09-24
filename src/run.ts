@@ -92,8 +92,11 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
   if (pending) log.info('resuming unfinished work from the last run', { unconfirmedOrders: state.pendingOrders().length, exits: state.pendingExits().length });
   await engine.sweepSettled();
   await engine.tick();
-  const sweep = setInterval(() => void engine.sweepSettled(), 10 * 60_000);
-  const ticker = setInterval(() => void engine.tick(), 15_000);
+  // a periodic job that rejects must be logged, not left unhandled: Node exits on an unhandled rejection
+  const every = (ms: number, name: string, job: () => Promise<void>) =>
+    setInterval(() => { job().catch((e: unknown) => log.error(`${name} failed; will run again`, { error: (e as Error).message })); }, ms);
+  const sweep = every(10 * 60_000, 'settlement sweep', () => engine.sweepSettled());
+  const ticker = every(15_000, 'pending-work tick', () => engine.tick());
   await stream.start();
 
   let stopping = false;
