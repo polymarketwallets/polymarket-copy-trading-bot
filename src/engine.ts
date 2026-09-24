@@ -132,7 +132,9 @@ export class CopyEngine {
     }
     state.markHandledTx(txKey);
     if (cfg.copy.sellMode === 'none') return this.decide(base, 'skipped_sell_mode_none');
-    if (!state.position(target, fill.tokenId)) return this.decide(base, 'skipped_no_position');
+    // a BUY still being confirmed may turn into a position: queue the exit anyway, it waits for the BUY
+    const buyPending = this.pendingBuy(target, fill.tokenId);
+    if (!state.position(target, fill.tokenId) && !buyPending) return this.decide(base, 'skipped_no_position');
     state.addPendingExit({ eventId: fill.eventId, target, tokenId: fill.tokenId, firstAt: this.now(), attempts: 0, nextAt: this.now() });
     this.decide(base, 'exit_queued');
     await this.attemptExit(state.pendingExits().find((e) => e.target === target && e.tokenId === fill.tokenId)!);
@@ -222,6 +224,10 @@ export class CopyEngine {
     this.record({ ...base, decision: p.side === 'buy' ? 'buy_unconfirmed' : 'sell_unconfirmed', orderId: r.orderId || null, reason: r.reason }, r.status === 'unknown' ? 'warn' : 'info');
   }
 
+  private pendingBuy(target: string, tokenId: string): boolean {
+    return this.o.state.pendingOrders().some((p) => p.side === 'buy' && p.target === target && p.tokenId === tokenId);
+  }
+
   /** Hand an order to a human. It stays pending — reservation and all — until `reconcile()`. */
   private needsReconcile(p: PendingOrder, reason: string): void {
     this.o.state.updatePendingOrder(p.key, { needsReconcile: reason });
@@ -281,7 +287,16 @@ export class CopyEngine {
     };
 
     const held = state.position(target, tokenId);
-    if (!held) return done('exit_done');
+    if (!held) {
+      // the BUY that would give us the position is still being confirmed (or awaits reconcile): wait
+      // for its verdict — filled means sell it, not filled means there is nothing to exit
+      if (this.pendingBuy(target, tokenId)) {
+        state.updatePendingExit(target, tokenId, { nextAt: this.now() + this.exitDelay(0) });
+        state.save();
+        return;
+      }
+      return done('exit_done');
+    }
     // an exit order still being confirmed: wait for it rather than sell the same shares twice
     if (state.pendingOrders().some((p) => p.target === target && p.tokenId === tokenId && p.side === 'sell')) {
       state.updatePendingExit(target, tokenId, { nextAt: this.now() + this.exitDelay(0) });

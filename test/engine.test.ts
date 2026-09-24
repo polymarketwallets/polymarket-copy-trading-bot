@@ -381,6 +381,34 @@ describe('SELL', () => {
     expect(h.state.positions()).toEqual([]);
   });
 
+  it('a SELL that arrives while our BUY is still unconfirmed is kept, and executed once the BUY turns out filled', async () => {
+    const h = setup(LIVE);
+    h.ex.buyResult = () => ({ orderId: 'o9', status: 'none', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'killed', recheck: true });
+    await h.engine.onFill(fill(), ws);
+    await h.engine.onFill(fill({ side: 'SELL' }), ws);
+    expect(h.last().decision).toBe('exit_queued');
+    expect(h.ex.sells).toEqual([]);
+    // restart, then the BUY is found filled
+    const again = h.restart();
+    h.ex.lateFill = { shares: 19_000_000n, usdc: 9_690_000n, feeUsdc: 0n, feeShares: 0n, orderIds: ['o9'] };
+    h.clock.t += 1_000; await again.tick();
+    h.clock.t += 1_000; await again.tick();
+    expect(h.ex.sells).toEqual([{ limit: toMicro('0.49'), shares: 19_000_000n }]);
+    expect(new BotState(h.dir, 'live').positions()).toEqual([]);
+  });
+
+  it('…and dropped once the BUY is confirmed not filled, or reconciled as none', async () => {
+    const h = setup(LIVE);
+    h.ex.buyResult = () => ({ orderId: 'o9', status: 'none', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'killed', recheck: true });
+    await h.engine.onFill(fill(), ws);
+    await h.engine.onFill(fill({ side: 'SELL' }), ws);
+    await h.engine.reconcile(h.state.pendingOrders()[0]!.key, null);
+    h.clock.t += 60_000; await h.engine.tick();
+    expect(h.state.pendingExits()).toEqual([]);
+    expect(h.ex.sells).toEqual([]);
+    expect(h.last().decision).toBe('exit_done');
+  });
+
   it('never sells what another target led us into', async () => {
     const h = setup();
     await h.engine.onFill(fill(), ws);
