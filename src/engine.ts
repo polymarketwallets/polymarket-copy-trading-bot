@@ -80,6 +80,16 @@ export class CopyEngine {
     log.info(decision, { target: short(base.target), ...pick(base, ['side', 'role', 'price']), ...extra });
   }
 
+  /**
+   * Persist "this fill is decided" BEFORE an order leaves. This is the at-most-once guarantee: a crash
+   * while the order is in flight then costs at most a missed copy on restart — never a second order.
+   */
+  private commit(base: Base, decision: string, extra: Record<string, unknown>): void {
+    this.o.state.markProcessed(base.eventId);
+    this.o.state.logDecision({ ...base, decision, ...extra });
+    this.o.state.save();
+  }
+
   private async handle(fill: Fill, meta: FillMeta): Promise<void> {
     const { cfg, state, targets } = this.o;
     if (state.isProcessed(fill.eventId)) return;
@@ -151,7 +161,7 @@ export class CopyEngine {
       return this.decide(base, 'dry_run_buy', { shares: fromMicro(shares), at: fromMicro(ask), cost: fmtUsd(usdc), market: market.question, outcome: outcome.outcome });
     }
 
-    state.logDecision({ ...base, decision: 'buy_submitted', limit: fromMicro(limit), shares: fromMicro(shares) });
+    this.commit(base, 'buy_submitted', { limit: fromMicro(limit), shares: fromMicro(shares) });
     const r = await exchange.buyFok(fill.tokenId, conditionId, limit, shares);
     if (r.status === 'filled') {
       state.addBuy(pos, r.netShares, r.usdc);
@@ -193,7 +203,7 @@ export class CopyEngine {
       state.drop(target, fill.tokenId);
       return this.decide(base, 'skipped_no_balance');
     }
-    state.logDecision({ ...base, decision: 'sell_submitted', limit: fromMicro(bid), shares: fromMicro(shares) });
+    this.commit(base, 'sell_submitted', { limit: fromMicro(bid), shares: fromMicro(shares) });
     const r = await exchange.sellFak(fill.tokenId, held.conditionId, bid, shares);
     if (r.status === 'filled') {
       const cost = (BigInt(held.costUsdc) * r.shares) / BigInt(held.shares);

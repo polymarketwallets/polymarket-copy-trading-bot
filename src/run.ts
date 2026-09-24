@@ -75,6 +75,7 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     wsOptions: agent ? { agent } : undefined,
     onEvent: (e: StreamEvent) => {
       if (e.type === 'hello') log.info('connected to the PMWallets fill stream', { session: e.session });
+      else if (e.type === 'gap' && e.skipped) log.info('reconnected before any fill was handled; nothing to replay');
       else if (e.type === 'gap') log.warn('missed fills detected; replaying from the last one handled', { reason: e.reason, fromBlock: e.fromBlock });
       else if (e.type === 'replayed' && e.delivered) log.info('replay done', { delivered: e.delivered });
       else if (e.type === 'replaced') log.warn('another connection with this API account took over the stream (one per account) — close the other bot or the browser feed page');

@@ -98,6 +98,20 @@ describe('BUY', () => {
     expect(h.decisions().length).toBe(1);
   });
 
+  it('the fill is on disk as decided before the order leaves (a crash mid-order cannot double it)', async () => {
+    for (const side of ['BUY', 'SELL'] as const) {
+      const h = setup({ mode: 'live', polymarket: { privateKey: 'ab'.repeat(32), signatureType: 0 } });
+      await h.engine.onFill(fill(), ws);
+      const f = fill({ side });
+      let onDiskAtSend: boolean | null = null;
+      const seeDisk = () => { onDiskAtSend = JSON.parse(readFileSync(h.state.file, 'utf8')).processed.includes(f.eventId); };
+      h.ex.buyResult = (shares, limit) => { seeDisk(); return { orderId: 'o', status: 'filled', shares, usdc: (shares * limit) / 1_000_000n, feeUsdc: 0n, netShares: shares }; };
+      h.ex.sellResult = (shares, limit) => { seeDisk(); return { orderId: 's', status: 'filled', shares, usdc: (shares * limit) / 1_000_000n, feeUsdc: 0n, netShares: shares }; };
+      await h.engine.onFill(f, ws);
+      expect(onDiskAtSend).toBe(true);
+    }
+  });
+
   it('skips stale fills — a replay after downtime must not trade history', async () => {
     const h = setup();
     await h.engine.onFill(fill({ ts: '2026-09-24 11:55:00' }), replay);
