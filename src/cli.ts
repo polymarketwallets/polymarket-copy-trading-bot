@@ -125,13 +125,17 @@ async function check(path: string): Promise<number> {
     const { balance: usdc, allowances } = await gw.collateral();
     const spenders = Object.entries(allowances);
     const zero = spenders.filter(([, v]) => v === 0n).map(([k]) => k);
-    if (spenders.length && zero.length === spenders.length) {
+    if (!spenders.length) {
+      // no approval data at all is not "approved": it cannot be confirmed, so it does not pass
+      bad('Polymarket returned no exchange approvals for this account, so they cannot be confirmed');
+      problems++;
+    } else if (zero.length === spenders.length) {
       bad(type === 0
         ? 'no exchange contract may spend this wallet\'s USDC yet: approve them before the first trade (see the README)'
         : 'no exchange contract may spend this account\'s USDC: finish setting up trading on polymarket.com (make one trade or deposit there) first');
       problems++;
     } else if (zero.length) console.log(`  ! no approval yet for ${zero.join(', ')} — orders routed through it will fail`);
-    else if (spenders.length) ok('exchange approvals in place');
+    else ok('exchange approvals in place');
     if (usdc > 0n) ok(`balance ${fmtUsd(usdc)} available to trade`);
     else {
       bad('balance $0.00 — if polymarket.com shows money in this account, signatureType or funderAddress is wrong');

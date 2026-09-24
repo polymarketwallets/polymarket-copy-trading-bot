@@ -57,3 +57,17 @@ describe('tokenBalance', () => {
     expect(await gw('', '19000000').tokenBalance('T')).toBe(19_000_000n);
   });
 });
+
+describe('collateral approvals', () => {
+  const gw = (resp: unknown) => {
+    const g = new PolymarketGateway({ clobUrl: 'http://x', signatureType: 0 }, { info() {}, warn() {}, error() {} });
+    (g as any).clob = { updateBalanceAllowance: async () => '', getBalanceAllowance: async () => resp };
+    return g;
+  };
+  it('reads spender → amount, and treats a missing or malformed map as none known', async () => {
+    expect(await gw({ balance: '5000000', allowances: { '0xA': '0', '0xB': '1000' } }).collateral()).toEqual({ balance: 5_000_000n, allowances: { '0xA': 0n, '0xB': 1000n } });
+    expect((await gw({ balance: '5000000' }).collateral()).allowances).toEqual({});
+    expect((await gw({ balance: '5000000', allowances: [] }).collateral()).allowances).toEqual({});
+    expect((await gw({ balance: '5000000', allowances: 'x' }).collateral()).allowances).toEqual({});
+  });
+});

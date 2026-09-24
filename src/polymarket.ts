@@ -337,7 +337,9 @@ export class PolymarketGateway {
     if (r?.error || r?.errorMsg) throw new Error(String(r.errorMsg || r.error));
     const amount = (v: unknown) => { const t = String(v ?? '0'); return t.includes('.') ? toMicro(t) : BigInt(t || '0'); };
     const allowances: Record<string, bigint> = {};
-    for (const [k, v] of Object.entries(r?.allowances ?? {})) allowances[k] = amount(v);
+    // anything but a mapping of spender → amount reads as "no approvals known" (check fails on that)
+    const raw = r?.allowances;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) for (const [k, v] of Object.entries(raw)) allowances[k] = amount(v);
     return { balance: amount(r?.balance), allowances };
   }
 

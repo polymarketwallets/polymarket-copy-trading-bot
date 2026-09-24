@@ -129,16 +129,48 @@ function listOf(v: unknown, path: string): unknown[] {
 }
 
 /** Merge onto the defaults and validate. Fail loud on anything that would make the bot trade wrong. */
+/** every key the config may contain — anything else is a typo, and a typo must not silently become a default */
+const ALLOWED = {
+  top: ['mode', 'pmwallets', 'polymarket', 'targets', 'copy', 'risk', 'dataDir'],
+  pmwallets: ['apiKey', 'baseUrl'],
+  polymarket: ['clobUrl', 'privateKey', 'signatureType', 'funderAddress', 'apiKey', 'apiSecret', 'apiPassphrase'],
+  copy: Object.keys(DEFAULTS.copy),
+  risk: Object.keys(DEFAULTS.risk),
+  target: ['entity', 'orderSizeUsdc', 'maxBuysPerOutcome'],
+};
+
+function onlyKnown(obj: Record<string, unknown>, allowed: string[], path: string): void {
+  for (const k of Object.keys(obj)) {
+    if (!allowed.includes(k)) {
+      const near = allowed.find((a) => a.toLowerCase() === k.toLowerCase() || a.toLowerCase().startsWith(k.toLowerCase()));
+      throw new Error(`unknown setting ${path}${k}${near ? ` — did you mean ${path}${near}?` : ''}`);
+    }
+  }
+}
+
+/** a section: missing or left empty → {}; anything but a mapping (e.g. `risk: 10`) is refused */
+function section(v: unknown, path: string, allowed: string[]): Record<string, any> {
+  if (v === undefined || v === null || v === '') return {};
+  if (typeof v !== 'object' || Array.isArray(v)) throw new Error(`${path} must be a group of settings, not ${JSON.stringify(v)}`);
+  onlyKnown(v as Record<string, unknown>, allowed, `${path}.`);
+  return v as Record<string, any>;
+}
+
 export function buildConfig(raw: Record<string, any>): Config {
-  const copyRaw = raw['copy'] ?? {};
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error('the config must be a group of settings');
+  onlyKnown(raw, ALLOWED.top, '');
+  const copyRaw = section(raw['copy'], 'copy', ALLOWED.copy);
+  const pmRaw = section(raw['pmwallets'], 'pmwallets', ALLOWED.pmwallets);
+  const polyRaw = section(raw['polymarket'], 'polymarket', ALLOWED.polymarket);
+  const riskRaw = section(raw['risk'], 'risk', ALLOWED.risk);
   const copy: CopyConfig = { ...DEFAULTS.copy, ...copyRaw };
   const c: Config = {
     mode: raw['mode'] ?? DEFAULTS.mode,
-    pmwallets: { apiKey: raw['pmwallets']?.apiKey, baseUrl: raw['pmwallets']?.baseUrl ?? 'https://api.pmwallets.com' },
-    polymarket: { ...DEFAULTS.polymarket, ...(raw['polymarket'] ?? {}) },
+    pmwallets: { apiKey: pmRaw['apiKey'], baseUrl: pmRaw['baseUrl'] ?? 'https://api.pmwallets.com' },
+    polymarket: { ...DEFAULTS.polymarket, ...polyRaw },
     targets: listOf(raw['targets'], 'targets').map((t: unknown) => (typeof t === 'string' ? { entity: t } : t)) as TargetConfig[],
     copy,
-    risk: { ...DEFAULTS.risk, ...(raw['risk'] ?? {}) },
+    risk: { ...DEFAULTS.risk, ...riskRaw },
     dataDir: raw['dataDir'] ?? DEFAULTS.dataDir,
   };
   if (typeof c.dataDir !== 'string' || !c.dataDir.trim()) throw new Error('dataDir is empty: remove the line to use ./pmw-data, or give a directory');
@@ -170,6 +202,7 @@ export function buildConfig(raw: Record<string, any>): Config {
   if (copy.sellMode !== 'all' && copy.sellMode !== 'none') throw new Error('copy.sellMode must be all or none');
 
   for (const [i, t] of c.targets.entries()) {
+    if (t && typeof t === 'object') onlyKnown(t as unknown as Record<string, unknown>, ALLOWED.target, `targets[${i}].`);
     if (!t || typeof t.entity !== 'string' || !(ADDRESS.test(t.entity) || HANDLE.test(t.entity))) {
       throw new Error(`targets[${i}].entity must be a 0x address or a 12-character handle`);
     }
