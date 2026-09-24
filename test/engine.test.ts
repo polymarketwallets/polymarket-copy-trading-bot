@@ -367,6 +367,23 @@ describe('SELL', () => {
     expect(h.last()).toMatchObject({ decision: 'exit_retry_zero_balance', lowReads: 1 });
   });
 
+  it('seeing shares ends a run of low readings, even when the SELL that follows does not fill', async () => {
+    const h = setup(LIVE);
+    await h.engine.onFill(fill(), ws);
+    h.ex.balance = 0n;
+    await h.engine.onFill(fill({ side: 'SELL' }), ws);
+    for (let i = 0; i < 3; i++) { h.clock.t += 5 * 60_000; await h.engine.tick(); }  // 4 low readings, 15 min
+    expect(h.state.pendingExits()[0]!.lowBalanceReads).toBe(4);
+    h.ex.balance = 19_000_000n;                                                      // shares show up
+    h.ex.sellResult = () => ({ orderId: '', status: 'failed', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'rejected' });
+    h.clock.t += 5 * 60_000; await h.engine.tick();
+    expect(h.state.pendingExits()[0]!.lowBalanceReads).toBe(0);
+    h.ex.balance = 0n;                                                               // one stale 0 again
+    h.clock.t += 5 * 60_000; await h.engine.tick();
+    expect(h.state.positions().length).toBe(1);
+    expect(h.last()).toMatchObject({ decision: 'exit_retry_zero_balance', lowReads: 1 });
+  });
+
   it('low readings while a BUY on the outcome is pending never accumulate', async () => {
     const h = setup(LIVE);
     await h.engine.onFill(fill(), ws);                                               // 19 booked

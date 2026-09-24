@@ -309,7 +309,7 @@ export class CopyEngine {
     }
     // an exit order still being confirmed: wait for it rather than sell the same shares twice
     if (state.pendingOrders().some((p) => p.target === target && p.tokenId === tokenId && p.side === 'sell')) {
-      state.updatePendingExit(target, tokenId, { nextAt: this.now() + this.exitDelay(0) });
+      state.updatePendingExit(target, tokenId, { nextAt: this.now() + this.exitDelay(0), lowBalanceReads: 0, lowBalanceSince: null });
       state.save();
       return;
     }
@@ -357,6 +357,8 @@ export class CopyEngine {
       return done('exit_blocked_reconcile', { balance: fromMicro(balance), bookedToOthers: fromMicro(others) }, 'error');
     }
 
+    // shares ARE there: whatever run of low readings came before is over
+    state.updatePendingExit(target, tokenId, { lowBalanceReads: 0, lowBalanceSince: null });
     const key = `sell|${exit.eventId}|${exit.attempts}`;
     this.commitOrder(null, { key, side: 'sell', orderId: null, target, tokenId, conditionId: held.conditionId, question: held.question, outcome: held.outcome, shares: shares.toString(), limit: clampLimit(bid, book.tickSize).toString(), reserveUsdc: '0', sentAt: this.now(), attempts: 0, nextAt: this.now() + this.recheckDelay(0) },
       { ...base, decision: 'sell_submitted', limit: fromMicro(bid), shares: fromMicro(shares) });
