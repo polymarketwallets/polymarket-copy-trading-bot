@@ -342,7 +342,9 @@ export class CopyEngine {
     const r = await exchange.sellFak(tokenId, held.conditionId, bid, shares);
     const costOfSold = (BigInt(held.costUsdc) * r.shares) / BigInt(held.shares);
     this.afterOrder(key, r, base, r.status === 'filled' ? { pnl: fmtUsd(r.usdc - r.feeUsdc - costOfSold) } : {});
-    if (r.status === 'filled' && !state.position(target, tokenId)) return done('exit_done');
+    // done only when nothing is left AND no BUY on this outcome can still turn into shares (a DCA add
+    // being confirmed): otherwise its late fill would reopen a position with no exit behind it
+    if (r.status === 'filled' && !state.position(target, tokenId) && !this.pendingBuy(target, tokenId)) return done('exit_done');
     // partial, unfilled, unconfirmed or rejected: try again later
     state.updatePendingExit(target, tokenId, { attempts: exit.attempts + 1, nextAt: this.now() + this.exitDelay(exit.attempts) });
     state.save();

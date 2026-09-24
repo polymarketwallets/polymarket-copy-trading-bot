@@ -397,6 +397,22 @@ describe('SELL', () => {
     expect(new BotState(h.dir, 'live').positions()).toEqual([]);
   });
 
+  it('an exit outlives the position while a DCA add is unconfirmed: the add\'s late fill is sold too', async () => {
+    const h = setup(LIVE);
+    await h.engine.onFill(fill(), ws);                                   // first BUY: 19 shares booked
+    h.ex.buyResult = () => ({ orderId: 'o2', status: 'none', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'killed', recheck: true });
+    await h.engine.onFill(fill(), ws);                                   // the add is unconfirmed
+    await h.engine.onFill(fill({ side: 'SELL' }), ws);                   // target exits: the 19 are sold
+    expect(h.ex.sells).toEqual([{ limit: toMicro('0.49'), shares: 19_000_000n }]);
+    expect(h.state.pendingExits().length).toBe(1);                       // …but the exit stays
+    h.ex.lateFill = { shares: 19_000_000n, usdc: 9_690_000n, feeUsdc: 0n, feeShares: 0n, orderIds: ['o2'] };
+    h.clock.t += 1_000; await h.engine.tick();                           // the add did fill
+    h.clock.t += 1_000; await h.engine.tick();
+    expect(h.ex.sells.length).toBe(2);
+    expect(h.state.positions()).toEqual([]);
+    expect(h.state.pendingExits()).toEqual([]);
+  });
+
   it('…and dropped once the BUY is confirmed not filled, or reconciled as none', async () => {
     const h = setup(LIVE);
     h.ex.buyResult = () => ({ orderId: 'o9', status: 'none', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'killed', recheck: true });
