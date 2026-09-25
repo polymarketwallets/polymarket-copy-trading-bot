@@ -1,6 +1,10 @@
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
+import { RotatingFile } from './files.js';
+
+/** a busy trader yields thousands of decisions a day: keep the newest ~120 MB */
+const DECISIONS_MAX_BYTES = 20 * 1024 * 1024;
 
 /** What we hold because we followed one target into one outcome. Keyed per target: target A's SELL
  *  never sells what we bought following target B. Amounts are 1e-6 micro-units, stored as strings. */
@@ -92,11 +96,13 @@ export class BotState {
   private readonly booked = new Set<string>();
   readonly file: string;
   readonly decisionsFile: string;
+  private readonly decisions: RotatingFile;
 
   constructor(dir: string, mode: string) {
     mkdirSync(dir, { recursive: true });
     this.file = join(dir, `state.${mode}.json`);
     this.decisionsFile = join(dir, `decisions.${mode}.jsonl`);
+    this.decisions = new RotatingFile(this.decisionsFile, DECISIONS_MAX_BYTES, 5);
     const d = (existsSync(this.file) ? JSON.parse(readFileSync(this.file, 'utf8')) : {}) as Partial<Persisted>;
     this.data = {
       version: 1,
@@ -236,7 +242,7 @@ export class BotState {
   logDecision(entry: Record<string, unknown>): void {
     // `at` is the log's own timestamp: no field of an entry may overwrite it
     const { at: _dropped, ...rest } = entry;
-    appendFileSync(this.decisionsFile, `${JSON.stringify({ at: new Date().toISOString(), ...rest }, (_, v) => (typeof v === 'bigint' ? v.toString() : v))}\n`);
+    this.decisions.append(`${JSON.stringify({ at: new Date().toISOString(), ...rest }, (_, v) => (typeof v === 'bigint' ? v.toString() : v))}\n`);
   }
 }
 
