@@ -17,6 +17,16 @@ describe('rotating files', () => {
     expect(existsSync(`${p}.3`)).toBe(false);
   });
 
+  it('a crash between the two steps of a rotation loses nothing', () => {
+    const p = join(dir(), 'bot.log');
+    writeFileSync(`${p}.rotating`, 'moved aside\n');
+    writeFileSync(`${p}.1`, 'older\n');
+    new RotatingFile(p, 100, 3).append('new\n');
+    expect(readFileSync(`${p}.1`, 'utf8')).toBe('moved aside\n');
+    expect(readFileSync(`${p}.2`, 'utf8')).toBe('older\n');
+    expect(readFileSync(p, 'utf8')).toBe('new\n');
+  });
+
   it('picks up the size of a file it did not write', () => {
     const p = join(dir(), 'bot.log');
     writeFileSync(p, 'x'.repeat(15) + '\n');

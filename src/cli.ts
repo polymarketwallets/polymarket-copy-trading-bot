@@ -9,6 +9,7 @@ import { consoleLogger, teeLogger } from './log.js';
 import { RotatingFile } from './files.js';
 import { VERSION } from './version.js';
 import { diagnose } from './diagnose.js';
+import { addConfigSecrets } from './secrets.js';
 import { funderMismatch, run } from './run.js';
 import { checkFunder } from './wallets.js';
 import { checkGeo, describeGeo } from './geo.js';
@@ -52,6 +53,7 @@ async function main() {
   }
   if (cmd === 'run') {
     const cfg = loadConfig(arg('--config', 'config.yaml'));
+    addConfigSecrets(cfg, process.env);
     const log = teeLogger(consoleLogger(process.argv.includes('--json')), new RotatingFile(join(cfg.dataDir, `bot.${cfg.mode}.log`), 10 * 1024 * 1024, 5));
     log.info(`pmwallets-copytrade ${VERSION}`, { node: process.version, platform: process.platform, arch: process.arch });
     try {

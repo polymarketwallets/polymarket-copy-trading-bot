@@ -1,4 +1,5 @@
 import type { RotatingFile } from './files.js';
+import { redact, redactText } from './secrets.js';
 
 export interface Logger {
   info(msg: string, fields?: Record<string, unknown>): void;
@@ -25,10 +26,13 @@ export function consoleLogger(json = false): Logger {
 
 /**
  * `inner`, and a JSON line per event in `file` — the log a user can send us when something went wrong, whether
- * or not their terminal kept it. A failed write is dropped: the log must never stop the bot.
+ * or not their terminal kept it. Every known credential is removed first (an error message can quote one), and
+ * a failed write is dropped: the log must never stop the bot.
  */
 export function teeLogger(inner: Logger, file: RotatingFile): Logger {
-  const write = (level: 'info' | 'warn' | 'error', msg: string, fields?: Record<string, unknown>) => {
+  const write = (level: 'info' | 'warn' | 'error', m: string, f?: Record<string, unknown>) => {
+    const msg = redactText(m);
+    const fields = f && redact(f);
     inner[level](msg, fields);
     try { file.append(`${JSON.stringify({ ts: new Date().toISOString(), level, msg, ...fields }, big)}\n`); } catch { /* see above */ }
   };

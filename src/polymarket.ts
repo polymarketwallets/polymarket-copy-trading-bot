@@ -12,6 +12,7 @@ import type { PolymarketConfig } from './config.js';
 import type { Logger } from './log.js';
 import { UNIT, clampLimit, fromMicro, roundBuyShares, roundSellShares, toMicro } from './units.js';
 import { parseMarketEndDate } from './filters.js';
+import { addSecret } from './secrets.js';
 
 export interface Level { price: bigint; size: bigint }
 export interface Book { tokenId: string; bids: Level[]; asks: Level[]; tickSize?: bigint; minOrderSize?: bigint }
@@ -133,6 +134,8 @@ export class PolymarketGateway {
       if (!creds?.key) creds = await l1.createApiKey();
       if (!creds?.key || !creds.secret || !creds.passphrase) throw new Error('could not derive Polymarket API credentials');
     }
+    // derived at run time, so no config scan knows them: register them before anything can log them
+    for (const v of [creds.key, creds.secret, creds.passphrase]) addSecret(v);
     this.clob = new ClobClient({ ...base, creds });
     this.log.info('polymarket trading client ready', { signer: account.address, funder: this.cfg.funderAddress ?? account.address });
   }

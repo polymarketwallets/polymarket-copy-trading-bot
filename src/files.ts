@@ -2,16 +2,21 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, r
 import { dirname } from 'node:path';
 
 /**
- * An append-only file that never grows past `keep + 1` pieces of `maxBytes`: `name` is written, `name.1` is the
- * piece before it, … `name.<keep>` the oldest. A failed rotation keeps appending to the current file — losing
- * the size limit is better than losing the line, and a log must never stop the bot.
+ * An append-only file that never grows far past `keep + 1` pieces of `maxBytes`: `name` is written, `name.1` is
+ * the piece before it, … `name.<keep>` the oldest. Rotation first moves the current file aside under one name; only
+ * once that worked are the older pieces shifted, so a rename that keeps failing (Windows, a file open elsewhere)
+ * never eats them. After a failure the next attempt waits for another `maxBytes`: a log must never stop the bot,
+ * and losing the size limit for a while is better than losing lines.
  */
 export class RotatingFile {
   private size: number;
+  private readonly aside: string;
 
   constructor(readonly path: string, private readonly maxBytes: number, private readonly keep: number) {
     mkdirSync(dirname(path), { recursive: true });
+    this.aside = `${path}.rotating`;
     this.size = existsSync(path) ? statSync(path).size : 0;
+    if (existsSync(this.aside)) this.shiftIn(); // a rotation cut short by a crash
   }
 
   append(line: string): void {
@@ -23,11 +28,23 @@ export class RotatingFile {
 
   private rotate(): void {
     try {
+      if (existsSync(this.aside)) this.shiftIn();
+      renameSync(this.path, this.aside);
+    } catch {
+      this.size = 0; // try again after another maxBytes
+      return;
+    }
+    this.size = 0;
+    this.shiftIn();
+  }
+
+  /** `.rotating` becomes `.1`, the older pieces move up one, the oldest goes */
+  private shiftIn(): void {
+    try {
       if (existsSync(`${this.path}.${this.keep}`)) unlinkSync(`${this.path}.${this.keep}`);
       for (let i = this.keep - 1; i >= 1; i--) if (existsSync(`${this.path}.${i}`)) renameSync(`${this.path}.${i}`, `${this.path}.${i + 1}`);
-      renameSync(this.path, `${this.path}.1`);
-      this.size = 0;
-    } catch { /* keep writing where we are */ }
+      renameSync(this.aside, `${this.path}.1`);
+    } catch { /* left as .rotating: the next rotation finishes it */ }
   }
 }
 

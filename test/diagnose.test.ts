@@ -2,8 +2,11 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { describe, expect, it } from 'vitest';
-import { diagnose, scrub, secretsOf } from '../src/diagnose.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { diagnose } from '../src/diagnose.js';
+import { addConfigSecrets, addSecret, clearSecrets, redact, redactText } from '../src/secrets.js';
+import { RotatingFile } from '../src/files.js';
+import { consoleLogger, teeLogger } from '../src/log.js';
 import { VERSION } from '../src/version.js';
 import { loadConfig } from '../src/config.js';
 
@@ -27,6 +30,7 @@ function setup() {
 }
 
 describe('diagnose', () => {
+  beforeEach(() => clearSecrets());
   it('bundles what support needs and not a single key', async () => {
     const { dir, env } = setup();
     const check = async (_: string, out: (l: string) => void) => { out(`  ✓ signer ok (${PMW})`); out('  ✗ region'); return 1; };
@@ -67,8 +71,49 @@ describe('diagnose', () => {
     expect(JSON.parse(text).config.error).not.toContain('\n');
   });
 
+  it('reads dataDir from a config that does not load, instead of guessing the default', async () => {
+    const { dir, env } = setup();
+    const data = join(dir, 'elsewhere');
+    mkdirSync(data);
+    writeFileSync(join(data, 'decisions.live.jsonl'), '{"decision":"bought"}\n');
+    writeFileSync(join(dir, 'bad.yaml'), `mode: live\nnonsense: 1\ndataDir: "${data}"   # custom\n`);
+    const b = JSON.parse(gunzipSync(readFileSync(await diagnose(join(dir, 'bad.yaml'), async () => 1, { env, outDir: dir }))).toString('utf8'));
+    expect(b.dataDir).toContain('read from the config text');
+    expect(Object.keys(b.files)).toEqual(['decisions.live.jsonl']);
+  });
+});
+
+describe('credentials never reach a file', () => {
+  beforeEach(() => clearSecrets());
+
+  it('matches before JSON escaping, and in every 0x/case form', () => {
+    addSecret('abcd"efgh\\ij');
+    addSecret('0x' + 'ab'.repeat(32));
+    const text = JSON.stringify(redact({ e: 'pw abcd"efgh\\ij', k: ['0X' + 'AB'.repeat(32), '0x' + 'AB'.repeat(32), 'ab'.repeat(32)] }));
+    expect(text).toBe('{"e":"pw <redacted>","k":["<redacted>","<redacted>","<redacted>"]}');
+  });
+
   it('never treats a short value as a secret: it would blank out ordinary text', () => {
-    expect(secretsOf(null, { MY_TOKEN: 'abc', PATH: '/usr/bin/longenough' })).toEqual([]);
-    expect(scrub('x https://a:b@h/ y', [])).toBe('x https://***@h/ y');
+    addConfigSecrets(null, { MY_TOKEN: 'abc', PATH: '/usr/bin/longenough' });
+    expect(redactText('abc /usr/bin/longenough')).toBe('abc /usr/bin/longenough');
+    expect(redactText('x https://a:b@h/ y')).toBe('x https://***@h/ y');
+  });
+
+  it('keeps them out of the run log, the terminal and the file alike', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pmw-log-'));
+    addConfigSecrets(null, { POLY_PRIVATE_KEY: KEY, PMW_API_KEY: PMW });
+    addSecret('derived-clob-secret==');
+    const printed: string[] = [];
+    const orig = console.log;
+    console.log = (l: string) => { printed.push(l); };
+    try {
+      teeLogger(consoleLogger(), new RotatingFile(join(dir, 'bot.log'), 1e6, 2))
+        .warn(`order failed for ${PMW}`, { error: `bad key ${KEY.slice(2).toUpperCase()}`, stack: 'at x (derived-clob-secret==)' });
+    } finally { console.log = orig; }
+    const file = readFileSync(join(dir, 'bot.log'), 'utf8');
+    for (const out of [file, printed.join('\n')]) {
+      for (const s of [PMW, KEY.slice(2), KEY.slice(2).toUpperCase(), 'derived-clob-secret']) expect(out).not.toContain(s);
+      expect(out).toContain('order failed for <redacted>');
+    }
   });
 });
