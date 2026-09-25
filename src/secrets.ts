@@ -38,7 +38,7 @@ export function addRawConfigSecrets(raw: string, env: NodeJS.ProcessEnv = proces
   const filled = raw.replace(/\$\{(\w+)\}/g, (m, n: string) => env[n] ?? m);
   try {
     const doc = parseDocument(filled, { schema: 'failsafe', uniqueKeys: false });
-    walk(doc.contents, false, env, doc);
+    walk(doc.contents, false, env, doc, { true: new Set(), false: new Set() });
   } catch { /* not YAML: the scan must do */ }
   for (const m of raw.matchAll(/^\s*[\w-]*(?:key|secret|pass|token|private)[\w-]*\s*:\s*(.+)$/gim)) {
     const v = m[1]!.replace(/\s+#.*$/, '').trim();
@@ -59,11 +59,15 @@ const CREDENTIAL_NAME = /key|secret|pass|token|private/i;
  * Every scalar under a credential-named key, read off the syntax tree rather than a parsed object: an object keeps
  * only the last of a key given twice, and a config that fails for that very reason is when this scan matters.
  */
-function walk(node: unknown, credential: boolean, env: NodeJS.ProcessEnv, doc: Document, depth = 0): void {
-  if (depth > 50) return; // aliases can point back up the tree
+type Seen = Record<'true' | 'false', Set<unknown>>;
+
+function walk(node: unknown, credential: boolean, env: NodeJS.ProcessEnv, doc: Document, seen: Seen, depth = 0): void {
+  // aliases can point back up the tree, or fan out (`&a [*a, *a]`): a node is walked once per credential flag
+  if (depth > 50 || seen[`${credential}`].has(node)) return;
+  seen[`${credential}`].add(node);
   if (isAlias(node)) {
     // `apiSecret: *a` holds whatever `&a` marks, wherever that stands
-    if (credential) walk(node.resolve(doc), true, env, doc, depth + 1);
+    if (credential) walk(node.resolve(doc), true, env, doc, seen, depth + 1);
   } else if (isScalar(node)) {
     if (!credential) return;
     const v = String(node.value ?? '');
@@ -72,10 +76,10 @@ function walk(node: unknown, credential: boolean, env: NodeJS.ProcessEnv, doc: D
   } else if (isMap(node)) {
     for (const pair of node.items) {
       const k = isScalar(pair.key) ? String(pair.key.value ?? '') : '';
-      walk(pair.value, credential || CREDENTIAL_NAME.test(k), env, doc, depth + 1);
+      walk(pair.value, credential || CREDENTIAL_NAME.test(k), env, doc, seen, depth + 1);
     }
   } else if (isSeq(node)) {
-    for (const v of node.items) walk(v, credential, env, doc, depth + 1);
+    for (const v of node.items) walk(v, credential, env, doc, seen, depth + 1);
   }
 }
 

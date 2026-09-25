@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { diagnose } from '../src/diagnose.js';
-import { addConfigSecrets, addSecret, clearSecrets, redact, redactText } from '../src/secrets.js';
+import { addConfigSecrets, addRawConfigSecrets, addSecret, clearSecrets, redact, redactText } from '../src/secrets.js';
 import { RotatingFile } from '../src/files.js';
 import { consoleLogger, teeLogger } from '../src/log.js';
 import { VERSION } from '../src/version.js';
@@ -161,6 +161,13 @@ describe('credentials never reach a file', () => {
     const text = readFileSync(join(dir, 'state.live.json'), 'utf8');
     expect(text).not.toContain('clobsecretvalue123');
     expect(st.pendingOrders()[0]!.needsReconcile).toContain('clobsecretvalue123'); // memory keeps what it had
+  });
+
+  it('walks a self-referencing alias once, however it fans out', () => {
+    const t = Date.now();
+    addRawConfigSecrets('polymarket:\n  apiSecret: &a [*a, *a, *a, loopsecretvalue1]\nx: &b {apiKey: *b, k2: *b, token: [*b, *b]}\n', {});
+    expect(Date.now() - t).toBeLessThan(1000);
+    expect(redactText('loopsecretvalue1')).toBe('<redacted>');
   });
 
   it('never treats a short value as a secret: it would blank out ordinary text', () => {
