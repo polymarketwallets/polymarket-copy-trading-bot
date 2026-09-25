@@ -102,7 +102,7 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
       else if (e.type === 'replaced') log.warn('another bot using this API account took over the stream (one per account; the newest API connection wins) — stop the other one');
       else if (e.type === 'disconnected') log.warn('stream disconnected; reconnecting', { code: e.code, reason: e.reason || undefined });
       else if (e.type === 'error') log.warn('stream error', { error: e.error.message });
-      else if (e.type === 'fatal') { log.error('stream stopped', { error: e.error.message }); void shutdown(1); }
+      else if (e.type === 'fatal') { log.error('stream stopped', { error: e.error.message, stack: e.error.stack }); void shutdown(1); }
     },
   });
 

@@ -5,6 +5,7 @@ import { gunzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { diagnose, scrub, secretsOf } from '../src/diagnose.js';
 import { VERSION } from '../src/version.js';
+import { loadConfig } from '../src/config.js';
 
 const KEY = '0x' + 'ab12'.repeat(16);
 const PMW = 'pmw_abcd1234_secretsecretsecret';
@@ -49,6 +50,21 @@ describe('diagnose', () => {
     const b = JSON.parse(gunzipSync(readFileSync(file)).toString('utf8'));
     expect(b.config.error).toMatch(/nonsense/);
     expect(b.check.output).toEqual(['check failed: no config']);
+  });
+
+  it.each([
+    ['an unterminated quote', `mode: live\npmwallets:\n  apiKey: "${PMW}\npolymarket:\n  privateKey: ${KEY}\n`],
+    ['a key where a group belongs', `mode: live\npmwallets: ${PMW}\n`],
+    ['a bad indent', `mode: live\npmwallets:\n  apiKey: ${PMW}\n    privateKey: '${KEY}'\n  apiSecret: c2VjcmV0c2VjcmV0c2VjcmV0\n`],
+  ])('keeps literal keys out of the bundle when the config does not parse (%s)', async (_, yaml) => {
+    const { dir } = setup();
+    writeFileSync(join(dir, 'broken.yaml'), yaml);
+    // the real check reads the config first, and its error is the parser's — excerpt and all
+    const file = await diagnose(join(dir, 'broken.yaml'), async (p) => { loadConfig(p, {}); return 0; }, { env: {}, outDir: dir });
+    const text = gunzipSync(readFileSync(file)).toString('utf8');
+    // the parser's excerpt cuts a long line short, so a prefix of the key must not be there either
+    for (const s of [PMW, KEY.slice(0, 40), KEY.slice(2, 40), 'c2VjcmV0c2VjcmV0c2VjcmV0']) expect(text).not.toContain(s);
+    expect(JSON.parse(text).config.error).not.toContain('\n');
   });
 
   it('never treats a short value as a secret: it would blank out ordinary text', () => {

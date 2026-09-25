@@ -24,11 +24,15 @@ export async function diagnose(
 ): Promise<string> {
   let cfg: Config | null = null;
   let configError: string | undefined;
-  try { cfg = loadConfig(configPath, env); } catch (e) { configError = (e as Error).message; }
+  let rawConfig = '';
+  try { rawConfig = readFileSync(configPath, 'utf8'); } catch { /* no file: loadConfig says so */ }
+  // a parser error quotes the line it failed on, key and all: keep its first line only, and scrub what the raw
+  // file holds, because a config that does not load gives no field to read the key from
+  try { cfg = loadConfig(configPath, env); } catch (e) { configError = (e as Error).message.split('\n')[0]; }
 
   const lines: string[] = [];
   let checkExit: number | null = null;
-  try { checkExit = await check(configPath, (l) => lines.push(l)); } catch (e) { lines.push(`check failed: ${(e as Error).message}`); }
+  try { checkExit = await check(configPath, (l) => lines.push(l)); } catch (e) { lines.push(`check failed: ${(e as Error).message.split('\n')[0]}`); }
 
   const dataDir = cfg?.dataDir ?? DEFAULTS.dataDir;
   const files: Record<string, string> = {};
@@ -53,7 +57,7 @@ export async function diagnose(
     dataDir,
     files,
   };
-  const text = scrub(JSON.stringify(bundle, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 1), secretsOf(cfg, env));
+  const text = scrub(JSON.stringify(bundle, (_, v) => (typeof v === 'bigint' ? v.toString() : v), 1), [...secretsOf(cfg, env), ...secretsInRaw(rawConfig)].sort((a, b) => b.length - a.length));
   const out = join(outDir, `pmw-diagnose-${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}.json.gz`);
   writeFileSync(out, gzipSync(text));
   return out;
@@ -88,6 +92,26 @@ export function secretsOf(cfg: Config | null, env: NodeJS.ProcessEnv): string[] 
     for (const x of [v, bare, bare.toLowerCase(), bare.toUpperCase()]) out.add(x);
   }
   return [...out].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Credential-looking values in a config file's raw text: the value of every key named like a credential, and any
+ * PMWallets key or 32-byte hex (a private key; a config holds no transaction hashes) wherever it stands.
+ */
+export function secretsInRaw(raw: string): string[] {
+  const vals: string[] = [];
+  for (const m of raw.matchAll(/^\s*[\w-]*(?:key|secret|pass|token|private)[\w-]*\s*:\s*(.+)$/gim)) {
+    const v = m[1]!.replace(/\s+#.*$/, '').trim().replace(/^['"]|['"]$/g, '');
+    if (!/^\$\{\w+\}$/.test(v)) vals.push(v);
+  }
+  for (const m of raw.matchAll(/pmw_[A-Za-z0-9]+_[A-Za-z0-9]+|(?:0x)?[0-9a-fA-F]{64}/g)) vals.push(m[0]);
+  const out = new Set<string>();
+  for (const v of vals) {
+    if (v.length < 8) continue;
+    const bare = v.replace(/^0x/i, '');
+    for (const x of [v, bare, bare.toLowerCase(), bare.toUpperCase()]) out.add(x);
+  }
+  return [...out];
 }
 
 /** `text` with every secret value, and any user:password in a URL, replaced */
