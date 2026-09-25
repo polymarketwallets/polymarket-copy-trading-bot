@@ -109,6 +109,10 @@ describe('credentials never reach a file', () => {
     expect(redactText(`${PMW} ${KEY}`)).toBe('<redacted> <redacted>');
   });
 
+  it('removes a PMWallets key by its shape, even one no longer in the config', () => {
+    expect(redactText('old key pmw_zz99yy88_rotatedawaylongago in a 0.1.3 log')).toBe('old key <redacted> in a 0.1.3 log');
+  });
+
   it('never treats a short value as a secret: it would blank out ordinary text', () => {
     addConfigSecrets(null, { MY_TOKEN: 'abc', PATH: '/usr/bin/longenough' });
     expect(redactText('abc /usr/bin/longenough')).toBe('abc /usr/bin/longenough');

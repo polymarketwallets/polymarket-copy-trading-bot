@@ -38,11 +38,14 @@ export function addRawConfigSecrets(raw: string): void {
   for (const m of raw.matchAll(/pmw_[A-Za-z0-9]+_[A-Za-z0-9]+|(?:0x)?[0-9a-fA-F]{64}/g)) addSecret(m[0]);
 }
 
-/** `s` with every known credential, and any user:password in a URL, replaced */
+/**
+ * `s` with every known credential, any PMWallets key by its shape (one rotated away since it was written is known
+ * to no one here), and any user:password in a URL, replaced
+ */
 export function redactText(s: string): string {
   let t = s;
   for (const v of ordered) if (t.includes(v)) t = t.split(v).join(REDACTED);
-  return t.replace(/\/\/[^/@\s"]*:[^/@\s"]*@/g, '//***@');
+  return t.replace(/pmw_[A-Za-z0-9]+_[A-Za-z0-9]+/g, REDACTED).replace(/\/\/[^/@\s"]*:[^/@\s"]*@/g, '//***@');
 }
 
 /** `value` with `redactText` applied to every string in it, keys included */
