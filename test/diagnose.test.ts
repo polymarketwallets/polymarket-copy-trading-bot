@@ -163,6 +163,33 @@ describe('credentials never reach a file', () => {
     expect(st.pendingOrders()[0]!.needsReconcile).toContain('clobsecretvalue123'); // memory keeps what it had
   });
 
+  it('keeps only the structure of what a release before 0.1.4 wrote: a credential since replaced is known to no one', async () => {
+    const { BotState } = await import('../src/state.js');
+    const { dir, env } = setup();
+    const data = join(dir, 'data');
+    // 0.1.3: unredacted decisions and a state file quoting an exchange error with the old CLOB secret
+    writeFileSync(join(data, 'decisions.live.jsonl'), '{"at":"2026-09-24T00:00:00Z","decision":"buy_rejected","tx":"0xabc","reason":"401 oldclobsecret999"}\n');
+    writeFileSync(join(data, 'state.live.json'), JSON.stringify({ version: 1, positions: {}, processed: [], handledTx: [], spend: { day: '', usdc: '0' },
+      pendingOrders: [{ key: 'old', side: 'buy', orderId: null, target: 't', tokenId: '1', conditionId: 'c', shares: '1', limit: '1', reserveUsdc: '1', sentAt: 0, attempts: 1, needsReconcile: 'lookup failed: oldclobsecret999' }],
+      pendingExits: [], bookedOrderIds: [] }));
+    // 0.1.4 opens it, adds its own lines and a fresh reason, and saves
+    const st = new BotState(data, 'live');
+    st.logDecision({ decision: 'skipped_slippage', reason: 'ask_0.55_vs_target_0.49' });
+    st.addPendingOrder({ key: 'new', side: 'buy', orderId: null, target: 't', tokenId: '2', conditionId: 'c', shares: '1', limit: '1', reserveUsdc: '1', sentAt: 0, attempts: 1 } as any);
+    st.updatePendingOrder('new', { needsReconcile: 'the order id never came back' });
+    st.save();
+    const b = JSON.parse(gunzipSync(readFileSync(await diagnose(join(dir, 'config.yaml'), async () => 0, { env, outDir: dir }))).toString('utf8'));
+    const text = JSON.stringify(b);
+    expect(text).not.toContain('oldclobsecret999');
+    const lines = b.files['decisions.live.jsonl'].trim().split('\n').map((l: string) => JSON.parse(l));
+    expect(lines[0]).toMatchObject({ decision: 'buy_rejected', tx: '0xabc', note: expect.stringContaining('before 0.1.4') });
+    expect(lines[0].reason).toBeUndefined();
+    expect(lines[1]).toMatchObject({ decision: 'skipped_slippage', reason: 'ask_0.55_vs_target_0.49' });
+    const orders = JSON.parse(b.files['state.live.json']).pendingOrders;
+    expect(orders.find((o: any) => o.key === 'old').needsReconcile).toContain('before 0.1.4');
+    expect(orders.find((o: any) => o.key === 'new').needsReconcile).toBe('the order id never came back');
+  });
+
   it('walks a self-referencing alias once, however it fans out', () => {
     const t = Date.now();
     addRawConfigSecrets('polymarket:\n  apiSecret: &a [*a, *a, *a, loopsecretvalue1]\nx: &b {apiKey: *b, k2: *b, token: [*b, *b]}\n', {});

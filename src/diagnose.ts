@@ -39,14 +39,14 @@ export async function diagnose(
   const dataDir = cfg?.dataDir ?? rawDataDir ?? DEFAULTS.dataDir;
   const files: Record<string, string> = {};
   for (const mode of ['live', 'dry-run']) {
-    for (const name of [`state.${mode}.json`, `stream.${mode}.json`]) {
-      const p = join(dataDir, name);
-      if (existsSync(p)) files[name] = readFileSync(p, 'utf8');
-    }
-    for (const name of [`bot.${mode}.log`, `decisions.${mode}.jsonl`]) {
-      const t = tailOf(join(dataDir, name), TAIL_BYTES);
-      if (t) files[name] = t;
-    }
+    const state = join(dataDir, `state.${mode}.json`);
+    if (existsSync(state)) files[`state.${mode}.json`] = stateForSupport(readFileSync(state, 'utf8'));
+    const stream = join(dataDir, `stream.${mode}.json`);
+    if (existsSync(stream)) files[`stream.${mode}.json`] = readFileSync(stream, 'utf8');
+    const log = tailOf(join(dataDir, `bot.${mode}.log`), TAIL_BYTES); // only releases that redact write this file
+    if (log) files[`bot.${mode}.log`] = log;
+    const decisions = tailOf(join(dataDir, `decisions.${mode}.jsonl`), TAIL_BYTES);
+    if (decisions) files[`decisions.${mode}.jsonl`] = decisionsForSupport(decisions);
   }
 
   const bundle = {
@@ -64,6 +64,31 @@ export async function diagnose(
   const out = join(outDir, `pmw-diagnose-${now.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}.json.gz`);
   writeFileSync(out, gzipSync(text));
   return out;
+}
+
+/**
+ * What older releases wrote was not redacted, and a credential in it that has since been replaced is known to no
+ * one here: of their lines only the structure is kept, never the free text (reasons, errors) that could quote one.
+ */
+const STRUCTURE = ['at', 'eventId', 'target', 'wallet', 'side', 'role', 'tokenId', 'price', 'usdc', 'tx', 'source', 'decision',
+  'limit', 'orderId', 'shares', 'fillPrice', 'outcome', 'won', 'pnl', 'payout', 'fee', 'filled', 'avg'];
+const OMITTED = '(written by a release before 0.1.4: text left out)';
+
+function decisionsForSupport(text: string): string {
+  return text.split('\n').filter(Boolean).map((line) => {
+    let e: Record<string, unknown>;
+    try { e = JSON.parse(line); } catch { return JSON.stringify({ note: OMITTED }); }
+    if (e['v']) return line;
+    return JSON.stringify({ ...Object.fromEntries(STRUCTURE.filter((k) => k in e).map((k) => [k, e[k]])), note: OMITTED });
+  }).join('\n') + '\n';
+}
+
+function stateForSupport(text: string): string {
+  let st: { writtenBy?: string; pendingOrders?: Array<Record<string, unknown>> };
+  try { st = JSON.parse(text); } catch { return OMITTED; }
+  st.pendingOrders = (st.pendingOrders ?? []).map((p) =>
+    p['needsReconcile'] && (!st.writtenBy || p['needsReconcileUnredacted']) ? { ...p, needsReconcile: OMITTED } : p);
+  return JSON.stringify(st, null, 1);
 }
 
 const firstLine = (e: unknown) => String((e as Error)?.message ?? e).split('\n')[0];

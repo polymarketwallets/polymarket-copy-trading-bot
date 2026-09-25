@@ -3,6 +3,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { RotatingFile } from './files.js';
 import { redact } from './secrets.js';
+import { VERSION } from './version.js';
 
 /** a busy trader yields thousands of decisions a day: keep the newest ~120 MB */
 const DECISIONS_MAX_BYTES = 20 * 1024 * 1024;
@@ -50,6 +51,8 @@ export interface PendingOrder {
    * reservation and keeps blocking its outcome until `pmwallets-copytrade reconcile` settles it.
    */
   needsReconcile?: string;
+  /** needsReconcile came from a release that did not redact it: a support bundle leaves the text out */
+  needsReconcileUnredacted?: boolean;
 }
 
 /** A target exited and we still have to: retried until the position is gone. */
@@ -71,6 +74,8 @@ export interface PendingExit {
 
 interface Persisted {
   version: 1;
+  /** the release that last wrote the file: from 0.1.4 every free-text field is redacted before it is written */
+  writtenBy?: string;
   positions: Record<string, Position>;
   /** eventIds already decided, oldest first — the at-most-once guarantee survives a restart */
   processed: string[];
@@ -116,6 +121,10 @@ export class BotState {
       bookedOrderIds: d.bookedOrderIds ?? [],
     };
     // fail closed on a record that lacks what the reconciliation needs: never read a missing amount as 0
+    // a file no release since redaction wrote: the reasons in it may quote a credential no one here knows any more
+    if (existsSync(this.file) && d.writtenBy === undefined) {
+      this.data.pendingOrders = this.data.pendingOrders.map((p) => (p.needsReconcile ? { ...p, needsReconcileUnredacted: true } : p));
+    }
     this.data.pendingOrders = this.data.pendingOrders.map((p) =>
       p.needsReconcile || (p.shares && p.limit && p.reserveUsdc !== undefined) ? p
         : { ...p, needsReconcile: 'written by an older build: the size and limit that were sent are unknown' });
@@ -130,7 +139,7 @@ export class BotState {
     trim(this.data.bookedOrderIds, this.booked);
     const tmp = `${this.file}.tmp`;
     // the reasons kept on unfinished orders quote exchange errors: no credential they echo may land in the file
-    const out = { ...this.data, pendingOrders: redact(this.data.pendingOrders), pendingExits: redact(this.data.pendingExits) };
+    const out = { ...this.data, writtenBy: VERSION, pendingOrders: redact(this.data.pendingOrders), pendingExits: redact(this.data.pendingExits) };
     writeFileSync(tmp, JSON.stringify(out, null, 1));
     renameSync(tmp, this.file);
   }
@@ -214,7 +223,8 @@ export class BotState {
   }
   addPendingOrder(p: PendingOrder): void { this.data.pendingOrders = [...this.data.pendingOrders.filter((x) => x.key !== p.key), p]; }
   updatePendingOrder(key: string, patch: Partial<PendingOrder>): void {
-    this.data.pendingOrders = this.data.pendingOrders.map((x) => (x.key === key ? { ...x, ...patch } : x));
+    const fresh = patch.needsReconcile !== undefined ? { needsReconcileUnredacted: undefined } : {};
+    this.data.pendingOrders = this.data.pendingOrders.map((x) => (x.key === key ? { ...x, ...patch, ...fresh } : x));
   }
   removePendingOrder(key: string): void { this.data.pendingOrders = this.data.pendingOrders.filter((x) => x.key !== key); }
 
@@ -246,7 +256,8 @@ export class BotState {
     // `at` is the log's own timestamp: no field of an entry may overwrite it
     const { at: _dropped, ...rest } = entry;
     // reasons quote API and signer errors: no credential they might echo may land in the file
-    this.decisions.append(`${JSON.stringify(redact({ at: new Date().toISOString(), ...rest }), (_, v) => (typeof v === 'bigint' ? v.toString() : v))}\n`);
+    // `v`: written redacted — a support bundle keeps the text of these lines, and only the structure of older ones
+    this.decisions.append(`${JSON.stringify(redact({ at: new Date().toISOString(), v: VERSION, ...rest }), (_, v) => (typeof v === 'bigint' ? v.toString() : v))}\n`);
   }
 }
 
