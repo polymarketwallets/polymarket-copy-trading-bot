@@ -118,6 +118,9 @@ describe('credentials never reach a file', () => {
     ['junk after a literal', 'polymarket:\n  apiSecret: "clobsecretvalue123" junk\n'],
     ['a quoted key name, and an unknown setting', 'polymarket:\n  "apiSecret": clobsecretvalue123\n  nonsense: 1\n'],
     ['a folded block scalar, and an unknown setting', 'polymarket:\n  apiSecret: >-\n    clobsecretvalue123\n  nonsense: 1\n'],
+    ['a double-quoted key with a placeholder', 'polymarket:\n  "apiSecret": ${CLOB_CREDENTIAL}\n  nonsense: 1\n'],
+    ['a single-quoted key with a placeholder', "polymarket:\n  'apiPassphrase': ${CLOB_CREDENTIAL}\n  nonsense: 1\n"],
+    ['a flow mapping with a placeholder', 'polymarket: {apiSecret: ${CLOB_CREDENTIAL}}\nnonsense: 1\n'],
     ['a literal block scalar in a flow of lines', 'polymarket:\n  apiPassphrase: |-\n    clobsecretvalue123\nnonsense: 1\n'],
   ])('keeps a CLOB credential out of the bundle when the config does not load: %s', async (_, yaml) => {
     const { dir } = setup();
