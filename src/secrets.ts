@@ -1,4 +1,4 @@
-import { parse } from 'yaml';
+import { isAlias, isMap, isScalar, isSeq, parseDocument, type Document } from 'yaml';
 import type { Config } from './config.js';
 
 /**
@@ -36,7 +36,10 @@ export function addRawConfigSecrets(raw: string, env: NodeJS.ProcessEnv = proces
   // block scalars, flow maps); the line scan below is for text the parser cannot read at all
   // placeholders are filled in first, as loadConfig does: `{apiSecret: ${X}}` only parses once `${X}` is gone
   const filled = raw.replace(/\$\{(\w+)\}/g, (m, n: string) => env[n] ?? m);
-  try { walk(parse(filled, { schema: 'failsafe', uniqueKeys: false }), false, env); } catch { /* not YAML: the scan must do */ }
+  try {
+    const doc = parseDocument(filled, { schema: 'failsafe', uniqueKeys: false });
+    walk(doc.contents, false, env, doc);
+  } catch { /* not YAML: the scan must do */ }
   for (const m of raw.matchAll(/^\s*[\w-]*(?:key|secret|pass|token|private)[\w-]*\s*:\s*(.+)$/gim)) {
     const v = m[1]!.replace(/\s+#.*$/, '').trim();
     // a placeholder names the variable holding the key, whatever that variable is called
@@ -52,15 +55,27 @@ export function addRawConfigSecrets(raw: string, env: NodeJS.ProcessEnv = proces
 
 const CREDENTIAL_NAME = /key|secret|pass|token|private/i;
 
-function walk(node: unknown, credential: boolean, env: NodeJS.ProcessEnv): void {
-  if (typeof node === 'string') {
+/**
+ * Every scalar under a credential-named key, read off the syntax tree rather than a parsed object: an object keeps
+ * only the last of a key given twice, and a config that fails for that very reason is when this scan matters.
+ */
+function walk(node: unknown, credential: boolean, env: NodeJS.ProcessEnv, doc: Document, depth = 0): void {
+  if (depth > 50) return; // aliases can point back up the tree
+  if (isAlias(node)) {
+    // `apiSecret: *a` holds whatever `&a` marks, wherever that stands
+    if (credential) walk(node.resolve(doc), true, env, doc, depth + 1);
+  } else if (isScalar(node)) {
     if (!credential) return;
-    for (const p of node.matchAll(/\$\{(\w+)\}/g)) addSecret(env[p[1]!]);
-    if (!/^\$\{\w+\}$/.test(node.trim())) addSecret(node.trim());
-  } else if (Array.isArray(node)) {
-    for (const v of node) walk(v, credential, env);
-  } else if (node && typeof node === 'object') {
-    for (const [k, v] of Object.entries(node)) walk(v, credential || CREDENTIAL_NAME.test(k), env);
+    const v = String(node.value ?? '');
+    for (const p of v.matchAll(/\$\{(\w+)\}/g)) addSecret(env[p[1]!]);
+    if (!/^\$\{\w+\}$/.test(v.trim())) addSecret(v.trim());
+  } else if (isMap(node)) {
+    for (const pair of node.items) {
+      const k = isScalar(pair.key) ? String(pair.key.value ?? '') : '';
+      walk(pair.value, credential || CREDENTIAL_NAME.test(k), env, doc, depth + 1);
+    }
+  } else if (isSeq(node)) {
+    for (const v of node.items) walk(v, credential, env, doc, depth + 1);
   }
 }
 
