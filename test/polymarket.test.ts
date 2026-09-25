@@ -76,13 +76,42 @@ describe('when a market settles', () => {
   const CID = '0xe1648bc0c286911bcb5fc228972268d3ca413aa4a6b4a6b03b8c983ba706f957';
   const clob = { condition_id: CID, question: 'Bitcoin Up or Down - 5m', closed: false, active: true, accepting_orders: true, end_date_iso: '2026-09-25T00:00:00Z', tokens: [] };
   const gw = () => new PolymarketGateway({ clobUrl: 'http://clob', signatureType: 0 }, { info() {}, warn() {}, error() {} });
-  const serve = (gamma: (url: string) => Response) => vi.stubGlobal('fetch', vi.fn(async (u: string) =>
-    u.startsWith('http://clob') ? new Response(JSON.stringify(clob)) : gamma(u)));
+  let gammaCalls = 0;
+  const serve = (gamma: (url: string) => Response) => vi.stubGlobal('fetch', vi.fn(async (u: string) => {
+    if (u.startsWith('http://clob')) return new Response(JSON.stringify(clob));
+    gammaCalls++;
+    return gamma(u);
+  }));
+  const at = (endDate: string) => () => new Response(JSON.stringify([{ conditionId: CID, endDate }]));
   afterEach(() => vi.unstubAllGlobals());
 
   it('takes the time from Gamma: the CLOB gives short markets only a date', async () => {
-    serve(() => new Response(JSON.stringify([{ conditionId: CID, endDate: '2026-09-25T03:45:00Z' }])));
-    expect((await gw().market(CID)).endDate).toBe('2026-09-25T03:45:00Z');
+    serve(at('2026-09-25T03:45:00Z'));
+    expect((await gw().market(CID, 30_000, true)).endDate).toBe('2026-09-25T03:45:00Z');
+  });
+
+  it('asks Gamma only when the caller needs the end date (exits and the settlement sweep do not)', async () => {
+    serve(at('2026-09-25T03:45:00Z'));
+    gammaCalls = 0;
+    expect((await gw().market(CID, 0)).endDate).toBe('2026-09-25T00:00:00Z');
+    expect(gammaCalls).toBe(0);
+  });
+
+  it('follows an end date that moves: Gamma is asked again once the market is stale', async () => {
+    const g = gw();
+    serve(at('2026-09-25T03:45:00Z'));
+    expect((await g.market(CID, 30_000, true)).endDate).toBe('2026-09-25T03:45:00Z');
+    serve(at('2026-09-26T03:45:00Z'));
+    expect((await g.market(CID, 0, true)).endDate).toBe('2026-09-26T03:45:00Z');
+  });
+
+  it('remembers that Gamma failed, so an outage costs one wait per market, not one per fill', async () => {
+    const g = gw();
+    serve(() => new Response('oops', { status: 502 }));
+    gammaCalls = 0;
+    await g.market(CID, 0, true);
+    expect((await g.market(CID, 0, true)).endDate).toBe('2026-09-25T00:00:00Z');
+    expect(gammaCalls).toBe(1);
   });
 
   it.each([
@@ -92,6 +121,6 @@ describe('when a market settles', () => {
     ['Gamma has no usable date', () => new Response(JSON.stringify([{ conditionId: CID, endDate: 'soon' }]))],
   ])('falls back to the CLOB date when %s', async (_, gamma) => {
     serve(gamma);
-    expect((await gw().market(CID)).endDate).toBe('2026-09-25T00:00:00Z');
+    expect((await gw().market(CID, 30_000, true)).endDate).toBe('2026-09-25T00:00:00Z');
   });
 });

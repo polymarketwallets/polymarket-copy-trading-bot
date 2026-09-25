@@ -10,7 +10,7 @@ import { UNIT, clampLimit, fmtUsd, fromMicro, parseFillTs, roundBuyShares, toMic
 export interface Exchange {
   readonly canTrade: boolean;
   conditionIdFor(tokenId: string): Promise<string>;
-  market(conditionId: string, maxAgeMs?: number): Promise<Market>;
+  market(conditionId: string, maxAgeMs?: number, withEndDate?: boolean): Promise<Market>;
   orderbook(tokenId: string): Promise<Book>;
   buyFok(tokenId: string, conditionId: string, limit: bigint, shares: bigint): Promise<OrderOutcome>;
   sellFak(tokenId: string, conditionId: string, limit: bigint, shares: bigint): Promise<OrderOutcome>;
@@ -171,7 +171,7 @@ export class CopyEngine {
     let conditionId: string; let market: Market; let book: Book;
     try {
       conditionId = held?.conditionId ?? await exchange.conditionIdFor(fill.tokenId);
-      market = await exchange.market(conditionId);
+      market = await exchange.market(conditionId, 30_000, cfg.copy.minSecondsToEndDate > 0 || cfg.copy.maxSecondsToEndDate > 0);
     } catch (e) { return this.decide(base, 'skipped_market_lookup_failed', { reason: (e as Error).message.slice(0, 200) }); }
     const mg = marketGate(market, 'buy', cfg.copy, this.now());
     if (!mg.ok) return this.decide(base, 'skipped_market', { reason: mg.reason });
