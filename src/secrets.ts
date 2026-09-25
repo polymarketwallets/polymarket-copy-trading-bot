@@ -30,10 +30,16 @@ export function addConfigSecrets(cfg: Config | null, env: NodeJS.ProcessEnv): vo
  * Credential-looking values in a config file's raw text, for when it does not load: the value of every key named
  * like a credential, and any PMWallets key or 32-byte hex (a private key; a config holds no transaction hash).
  */
-export function addRawConfigSecrets(raw: string): void {
+export function addRawConfigSecrets(raw: string, env: NodeJS.ProcessEnv = process.env): void {
   for (const m of raw.matchAll(/^\s*[\w-]*(?:key|secret|pass|token|private)[\w-]*\s*:\s*(.+)$/gim)) {
-    const v = m[1]!.replace(/\s+#.*$/, '').trim().replace(/^['"]|['"]$/g, '');
-    if (!/^\$\{\w+\}$/.test(v)) addSecret(v);
+    const v = m[1]!.replace(/\s+#.*$/, '').trim();
+    // a placeholder names the variable holding the key, whatever that variable is called
+    for (const p of v.matchAll(/\$\{(\w+)\}/g)) addSecret(env[p[1]!]);
+    if (/^\$\{\w+\}$/.test(v)) continue;
+    addSecret(v.replace(/^['"]|['"]$/g, ''));
+    // a line that does not parse may carry junk after the key: the first scalar on it is the likeliest key
+    const first = /^(?:"([^"]*)"|'([^']*)'|([^\s"'#,\]}]+))/.exec(v);
+    addSecret(first?.[1] ?? first?.[2] ?? first?.[3]);
   }
   for (const m of raw.matchAll(/pmw_[A-Za-z0-9]+_[A-Za-z0-9]+|(?:0x)?[0-9a-fA-F]{64}/g)) addSecret(m[0]);
 }

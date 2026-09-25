@@ -107,15 +107,18 @@ export function substituteEnv(text: string, env: NodeJS.ProcessEnv = process.env
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HANDLE = /^[0-9A-Z]{12}$/;
 
+/** a value quoted back in an error: short ones only — a long one may be a key put in the wrong place */
+const shown = (v: unknown) => { const j = JSON.stringify(v) ?? String(v); return j.length <= 16 ? j : `a ${j.length}-character value`; };
+
 function num(v: unknown, path: string, min: number, max: number): number {
   const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
-  if (typeof n !== 'number' || !Number.isFinite(n) || n < min || n > max) throw new Error(`${path} must be a number in [${min}, ${max}], got ${JSON.stringify(v)}`);
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < min || n > max) throw new Error(`${path} must be a number in [${min}, ${max}], got ${shown(v)}`);
   return n;
 }
 
 function int(v: unknown, path: string, min: number, max: number): number {
   const n = num(v, path, min, max);
-  if (!Number.isInteger(n)) throw new Error(`${path} must be a whole number, got ${JSON.stringify(v)}`);
+  if (!Number.isInteger(n)) throw new Error(`${path} must be a whole number, got ${shown(v)}`);
   return n;
 }
 
@@ -152,7 +155,7 @@ function onlyKnown(obj: Record<string, unknown>, allowed: string[], path: string
 /** a section: missing or left empty → {}; anything but a mapping (e.g. `risk: 10`) is refused */
 function section(v: unknown, path: string, allowed: string[]): Record<string, any> {
   if (v === undefined || v === null || v === '') return {};
-  if (typeof v !== 'object' || Array.isArray(v)) throw new Error(`${path} must be a group of settings, not ${JSON.stringify(v)}`);
+  if (typeof v !== 'object' || Array.isArray(v)) throw new Error(`${path} must be a group of settings, not ${shown(v)}`);
   onlyKnown(v as Record<string, unknown>, allowed, `${path}.`);
   return v as Record<string, any>;
 }
@@ -176,7 +179,7 @@ export function buildConfig(raw: Record<string, any>): Config {
   };
   if (typeof c.dataDir !== 'string' || !c.dataDir.trim()) throw new Error('dataDir is empty: remove the line to use ./pmw-data, or give a directory');
 
-  if (c.mode !== 'dry-run' && c.mode !== 'live') throw new Error(`mode must be dry-run or live, got ${JSON.stringify(c.mode)}`);
+  if (c.mode !== 'dry-run' && c.mode !== 'live') throw new Error(`mode must be dry-run or live, got ${shown(c.mode)}`);
   if (!c.pmwallets.apiKey || !/^pmw_/.test(c.pmwallets.apiKey)) throw new Error('pmwallets.apiKey is required (pmw_…, from https://pmwallets.com/keys)');
 
   // validated AND written back as numbers: YAML allows "60" and both implementations must compute with 60

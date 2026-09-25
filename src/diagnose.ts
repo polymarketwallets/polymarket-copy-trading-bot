@@ -23,7 +23,7 @@ export async function diagnose(
 ): Promise<string> {
   let rawConfig = '';
   try { rawConfig = readFileSync(configPath, 'utf8'); } catch { /* no file: loadConfig says so */ }
-  addRawConfigSecrets(rawConfig);
+  addRawConfigSecrets(rawConfig, env);
   let cfg: Config | null = null;
   let configError: string | undefined;
   // a parser error quotes the line it failed on — cut short, so no value match can catch it: keep the first line

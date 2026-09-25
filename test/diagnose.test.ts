@@ -113,6 +113,47 @@ describe('credentials never reach a file', () => {
     expect(redactText('old key pmw_zz99yy88_rotatedawaylongago in a 0.1.3 log')).toBe('old key <redacted> in a 0.1.3 log');
   });
 
+  it.each([
+    ['a placeholder for a variable of any name', 'polymarket:\n  apiSecret: ${CLOB_CREDENTIAL}\n  : broken\n'],
+    ['junk after a literal', 'polymarket:\n  apiSecret: "clobsecretvalue123" junk\n'],
+  ])('keeps a CLOB credential out of the bundle when the config does not load: %s', async (_, yaml) => {
+    const { dir } = setup();
+    writeFileSync(join(dir, 'broken.yaml'), `mode: live\ndataDir: ${join(dir, 'data')}\n${yaml}`);
+    // an older build logged an exchange error quoting it
+    writeFileSync(join(dir, 'data', 'decisions.live.jsonl'), '{"reason":"401 for key clobsecretvalue123"}\n');
+    const env = { CLOB_CREDENTIAL: 'clobsecretvalue123' };
+    const file = await diagnose(join(dir, 'broken.yaml'), async (p) => { loadConfig(p, env); return 0; }, { env, outDir: dir });
+    expect(gunzipSync(readFileSync(file)).toString('utf8')).not.toContain('clobsecretvalue123');
+  });
+
+  it('a key put where a group belongs is not quoted back by the config error, in the bundle or anywhere', async () => {
+    const { dir } = setup();
+    writeFileSync(join(dir, 'broken.yaml'), 'mode: live\npolymarket: [apiSecret, clobsecretvalue123]\n');
+    const file = await diagnose(join(dir, 'broken.yaml'), async (p) => { loadConfig(p, {}); return 0; }, { env: {}, outDir: dir });
+    expect(gunzipSync(readFileSync(file)).toString('utf8')).not.toContain('clobsecretvalue123');
+  });
+
+  it('config errors do not quote a long value back: it may be a key in the wrong place', () => {
+    const { dir } = setup();
+    writeFileSync(join(dir, 'c.yaml'), 'mode: live\npmwallets:\n  apiKey: pmw_a_b\npolymarket: [apiSecret, CLOBSECRET-ROTATED-123456]\n');
+    expect(() => loadConfig(join(dir, 'c.yaml'), {})).toThrow(/polymarket must be a group of settings, not a \d+-character value/);
+    writeFileSync(join(dir, 'd.yaml'), 'mode: live\npmwallets:\n  apiKey: pmw_a_b\nrisk: 10\n');
+    expect(() => loadConfig(join(dir, 'd.yaml'), {})).toThrow('risk must be a group of settings, not "10"');
+  });
+
+  it('keeps them out of the state file, where unfinished orders keep the exchange error', async () => {
+    const { BotState } = await import('../src/state.js');
+    const dir = mkdtempSync(join(tmpdir(), 'pmw-st-'));
+    addSecret('clobsecretvalue123');
+    const st = new BotState(dir, 'live');
+    st.addPendingOrder({ key: 'k', side: 'buy', orderId: null, target: 't', tokenId: '1', conditionId: 'c', shares: '1', limit: '1', reserveUsdc: '1', sentAt: 0, attempts: 1,
+      needsReconcile: 'exchange said: bad creds clobsecretvalue123' } as any);
+    st.save();
+    const text = readFileSync(join(dir, 'state.live.json'), 'utf8');
+    expect(text).not.toContain('clobsecretvalue123');
+    expect(st.pendingOrders()[0]!.needsReconcile).toContain('clobsecretvalue123'); // memory keeps what it had
+  });
+
   it('never treats a short value as a secret: it would blank out ordinary text', () => {
     addConfigSecrets(null, { MY_TOKEN: 'abc', PATH: '/usr/bin/longenough' });
     expect(redactText('abc /usr/bin/longenough')).toBe('abc /usr/bin/longenough');

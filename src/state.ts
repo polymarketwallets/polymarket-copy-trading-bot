@@ -129,7 +129,9 @@ export class BotState {
     trim(this.data.handledTx, this.handledTx);
     trim(this.data.bookedOrderIds, this.booked);
     const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(this.data, null, 1));
+    // the reasons kept on unfinished orders quote exchange errors: no credential they echo may land in the file
+    const out = { ...this.data, pendingOrders: redact(this.data.pendingOrders), pendingExits: redact(this.data.pendingExits) };
+    writeFileSync(tmp, JSON.stringify(out, null, 1));
     renameSync(tmp, this.file);
   }
 
