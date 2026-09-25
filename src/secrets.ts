@@ -34,7 +34,9 @@ export function addConfigSecrets(cfg: Config | null, env: NodeJS.ProcessEnv): vo
 export function addRawConfigSecrets(raw: string, env: NodeJS.ProcessEnv = process.env): void {
   // valid YAML that fails only the bot's own checks: the parser sees every form a key can take (quoted names,
   // block scalars, flow maps); the line scan below is for text the parser cannot read at all
-  try { walk(parse(raw, { schema: 'failsafe', uniqueKeys: false }), false, env); } catch { /* not YAML: the scan must do */ }
+  // placeholders are filled in first, as loadConfig does: `{apiSecret: ${X}}` only parses once `${X}` is gone
+  const filled = raw.replace(/\$\{(\w+)\}/g, (m, n: string) => env[n] ?? m);
+  try { walk(parse(filled, { schema: 'failsafe', uniqueKeys: false }), false, env); } catch { /* not YAML: the scan must do */ }
   for (const m of raw.matchAll(/^\s*[\w-]*(?:key|secret|pass|token|private)[\w-]*\s*:\s*(.+)$/gim)) {
     const v = m[1]!.replace(/\s+#.*$/, '').trim();
     // a placeholder names the variable holding the key, whatever that variable is called
