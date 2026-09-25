@@ -5,6 +5,7 @@ import { CopyEngine } from './engine.js';
 import type { Logger } from './log.js';
 import { PolymarketGateway } from './polymarket.js';
 import { checkFunder } from './wallets.js';
+import { checkGeo } from './geo.js';
 import { applyProxyFromEnv } from './proxy.js';
 import { BotState, InstanceLock } from './state.js';
 import { fmtUsd, toMicro } from './units.js';
@@ -74,6 +75,8 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     const usdc = await exchange.collateralBalance();
     log.info('polymarket balance', { usdc: fmtUsd(usdc) });
     if (usdc < toMicro(cfg.copy.orderSizeUsdc)) log.warn('balance is below one order: BUYs will be rejected until you deposit');
+    const geo = await checkGeo().catch(() => null);
+    if (geo && geo.api !== 'ok') log.warn(`this machine's IP is in ${geo.country}${geo.region ? `-${geo.region}` : ''}: Polymarket's API does not accept new positions from there — BUYs will be rejected (Ireland, AWS eu-west-1, is the nearest allowed region)`);
     if (await exchange.closedOnly().catch(() => false)) log.warn('Polymarket lets this account only close positions (region or account restriction): BUYs will be rejected');
   }
 
