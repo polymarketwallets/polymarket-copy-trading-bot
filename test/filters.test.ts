@@ -9,8 +9,9 @@ const lv = (p: string, s: string) => ({ price: toMicro(p), size: toMicro(s) });
 
 describe('gates', () => {
   it('market lifecycle; a SELL is never blocked by the time gates', () => {
-    const now = Date.parse('2029-12-31T23:55:00Z');
-    expect(marketGate(mkt(), 'buy', cfg, now)).toMatchObject({ ok: false, reason: expect.stringMatching(/settles_in_300s/) });
+    const now = Date.parse('2029-12-31T23:59:30Z');
+    expect(marketGate(mkt(), 'buy', cfg, now)).toMatchObject({ ok: false, reason: expect.stringMatching(/settles_in_30s/) });
+    expect(marketGate(mkt(), 'buy', cfg, Date.parse('2029-12-31T23:58:59Z'))).toEqual({ ok: true });
     expect(marketGate(mkt(), 'sell', cfg, now)).toEqual({ ok: true });
     expect(marketGate(mkt({ closed: true }), 'sell', cfg, now).ok).toBe(false);
     expect(marketGate(mkt({ endDate: undefined }), 'buy', { ...cfg, maxSecondsToEndDate: 3600 }, now)).toMatchObject({ reason: 'market_end_date_unknown' });

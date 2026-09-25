@@ -11,6 +11,7 @@ import { polygon } from 'viem/chains';
 import type { PolymarketConfig } from './config.js';
 import type { Logger } from './log.js';
 import { UNIT, clampLimit, fromMicro, roundBuyShares, roundSellShares, toMicro } from './units.js';
+import { parseMarketEndDate } from './filters.js';
 
 export interface Level { price: bigint; size: bigint }
 export interface Book { tokenId: string; bids: Level[]; asks: Level[]; tickSize?: bigint; minOrderSize?: bigint }
@@ -82,6 +83,8 @@ export function classifyPost(resp: unknown): 'answer' | 'rejected' | 'unknown' {
   return 'unknown';
 }
 
+const GAMMA_URL = 'https://gamma-api.polymarket.com';
+
 const ZERO_FILL = /no orders found|couldn't be fully filled|fully filled or killed/i;
 
 export class PolymarketGateway {
@@ -89,6 +92,7 @@ export class PolymarketGateway {
   private readonly tokenToCondition = new Map<string, string>();
   private readonly tickSizes = new Map<string, bigint>();
   private readonly marketCache = new Map<string, { at: number; market: Market }>();
+  private readonly gammaEnds = new Map<string, { at: number; endDate: string }>();
 
   constructor(private readonly cfg: PolymarketConfig, private readonly log: Logger) {}
 
@@ -152,11 +156,31 @@ export class PolymarketGateway {
     return cid;
   }
 
-  /** CLOB market by condition id; cached for `maxAgeMs` */
+  /**
+   * When the market settles, from Gamma. The CLOB's `end_date_iso` is only a date for short markets (a 5-minute
+   * Bitcoin market ending 03:45Z says 00:00Z), which the end-date filters read as already past — and let through.
+   * Cached for an hour once found; undefined when Gamma cannot say, and the CLOB value is used instead.
+   */
+  private async gammaEndDate(conditionId: string): Promise<string | undefined> {
+    const hit = this.gammaEnds.get(conditionId);
+    if (hit && Date.now() - hit.at < 3_600_000) return hit.endDate;
+    try {
+      const res = await fetch(`${GAMMA_URL}/markets?condition_ids=${encodeURIComponent(conditionId)}`, { signal: AbortSignal.timeout(5_000) });
+      if (!res.ok) return undefined;
+      const rows = await res.json();
+      const row = Array.isArray(rows) ? rows.find((r: any) => String(r?.conditionId ?? '').toLowerCase() === conditionId.toLowerCase()) : undefined;
+      const endDate = row?.endDate;
+      if (typeof endDate !== 'string' || parseMarketEndDate(endDate) === null) return undefined;
+      this.gammaEnds.set(conditionId, { at: Date.now(), endDate });
+      return endDate;
+    } catch { return undefined; }
+  }
+
+  /** CLOB market by condition id, with Gamma's end date; cached for `maxAgeMs` */
   async market(conditionId: string, maxAgeMs = 30_000): Promise<Market> {
     const hit = this.marketCache.get(conditionId);
     if (hit && Date.now() - hit.at < maxAgeMs) return hit.market;
-    const m = await this.getJson(`/markets/${encodeURIComponent(conditionId)}`);
+    const [m, gammaEnd] = await Promise.all([this.getJson(`/markets/${encodeURIComponent(conditionId)}`), this.gammaEndDate(conditionId)]);
     if (!m || typeof m !== 'object' || m.error) throw new Error(`CLOB market ${conditionId}: ${JSON.stringify(m).slice(0, 200)}`);
     const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : typeof v === 'string' ? v.toLowerCase() === 'true' : d);
     const market: Market = {
@@ -165,7 +189,7 @@ export class PolymarketGateway {
       closed: bool(m.closed, false),
       active: bool(m.active, true),
       acceptingOrders: m.accepting_orders === undefined ? undefined : bool(m.accepting_orders, true),
-      endDate: typeof m.end_date_iso === 'string' && m.end_date_iso ? m.end_date_iso : undefined,
+      endDate: gammaEnd ?? (typeof m.end_date_iso === 'string' && m.end_date_iso ? m.end_date_iso : undefined),
       tokens: (m.tokens ?? []).map((t: any) => ({
         tokenId: String(t.token_id ?? ''), outcome: String(t.outcome ?? ''),
         winner: typeof t.winner === 'boolean' ? t.winner : undefined,

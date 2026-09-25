@@ -86,7 +86,7 @@ export const DEFAULTS: Omit<Config, 'pmwallets' | 'polymarket' | 'targets'> & { 
     maxPrice: 0.95,
     maxSlippage: 0.03,
     minBookDepthUsdc: 50,
-    minSecondsToEndDate: 600,
+    minSecondsToEndDate: 60,
     maxSecondsToEndDate: 0,
     sellMode: 'all',
   },

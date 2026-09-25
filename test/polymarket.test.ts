@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PolymarketGateway, attributeFills, classifyPost } from '../src/polymarket.js';
 import { toMicro } from '../src/units.js';
 
@@ -69,5 +69,29 @@ describe('collateral approvals', () => {
     expect((await gw({ balance: '5000000' }).collateral()).allowances).toEqual({});
     expect((await gw({ balance: '5000000', allowances: [] }).collateral()).allowances).toEqual({});
     expect((await gw({ balance: '5000000', allowances: 'x' }).collateral()).allowances).toEqual({});
+  });
+});
+
+describe('when a market settles', () => {
+  const CID = '0xe1648bc0c286911bcb5fc228972268d3ca413aa4a6b4a6b03b8c983ba706f957';
+  const clob = { condition_id: CID, question: 'Bitcoin Up or Down - 5m', closed: false, active: true, accepting_orders: true, end_date_iso: '2026-09-25T00:00:00Z', tokens: [] };
+  const gw = () => new PolymarketGateway({ clobUrl: 'http://clob', signatureType: 0 }, { info() {}, warn() {}, error() {} });
+  const serve = (gamma: (url: string) => Response) => vi.stubGlobal('fetch', vi.fn(async (u: string) =>
+    u.startsWith('http://clob') ? new Response(JSON.stringify(clob)) : gamma(u)));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('takes the time from Gamma: the CLOB gives short markets only a date', async () => {
+    serve(() => new Response(JSON.stringify([{ conditionId: CID, endDate: '2026-09-25T03:45:00Z' }])));
+    expect((await gw().market(CID)).endDate).toBe('2026-09-25T03:45:00Z');
+  });
+
+  it.each([
+    ['Gamma is down', () => new Response('oops', { status: 502 })],
+    ['Gamma does not know the market', () => new Response('[]')],
+    ['Gamma answers for another market', () => new Response(JSON.stringify([{ conditionId: '0xother', endDate: '2026-09-25T03:45:00Z' }]))],
+    ['Gamma has no usable date', () => new Response(JSON.stringify([{ conditionId: CID, endDate: 'soon' }]))],
+  ])('falls back to the CLOB date when %s', async (_, gamma) => {
+    serve(gamma);
+    expect((await gw().market(CID)).endDate).toBe('2026-09-25T00:00:00Z');
   });
 });
