@@ -5,7 +5,7 @@ import { CopyEngine } from './engine.js';
 import type { Logger } from './log.js';
 import { PolymarketGateway } from './polymarket.js';
 import { checkFunder } from './wallets.js';
-import { checkGeo } from './geo.js';
+import { checkGeo, describeGeo } from './geo.js';
 import { applyProxyFromEnv } from './proxy.js';
 import { BotState, InstanceLock } from './state.js';
 import { fmtUsd, toMicro } from './units.js';
@@ -75,9 +75,18 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     const usdc = await exchange.collateralBalance();
     log.info('polymarket balance', { usdc: fmtUsd(usdc) });
     if (usdc < toMicro(cfg.copy.orderSizeUsdc)) log.warn('balance is below one order: BUYs will be rejected until you deposit');
-    const geo = await checkGeo().catch(() => null);
-    if (geo && geo.api !== 'ok') log.warn(`this machine's IP is in ${geo.country}${geo.region ? `-${geo.region}` : ''}: Polymarket's API does not accept new positions from there — BUYs will be rejected (Ireland, AWS eu-west-1, is the nearest allowed region)`);
-    if (await exchange.closedOnly().catch(() => false)) log.warn('Polymarket lets this account only close positions (region or account restriction): BUYs will be rejected');
+    // warnings, not refusals: the lookups are advisory, and a failed one must not keep the bot from starting
+    try {
+      const geo = await checkGeo();
+      if (geo.api !== 'ok') log.warn(describeGeo(geo));
+    } catch (e) {
+      log.warn('could not verify that Polymarket accepts orders from this region; if it does not, copied BUYs are rejected and not retried', { error: (e as Error).message });
+    }
+    try {
+      if (await exchange.closedOnly()) log.warn('Polymarket lets this account only close positions (region or account restriction): BUYs will be rejected');
+    } catch (e) {
+      log.warn('could not check whether this account is limited to closing positions', { error: (e as Error).message });
+    }
   }
 
   const engine = new CopyEngine({ cfg, exchange, state, log, targets });

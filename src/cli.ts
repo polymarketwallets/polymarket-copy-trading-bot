@@ -8,7 +8,7 @@ import { applyProxyFromEnv } from './proxy.js';
 import { consoleLogger } from './log.js';
 import { funderMismatch, run } from './run.js';
 import { checkFunder } from './wallets.js';
-import { checkGeo } from './geo.js';
+import { checkGeo, describeGeo } from './geo.js';
 import { BotState, InstanceLock } from './state.js';
 import { CopyEngine } from './engine.js';
 import { PolymarketGateway } from './polymarket.js';
@@ -156,10 +156,8 @@ async function check(path: string): Promise<number> {
   }
   try {
     const g = await checkGeo();
-    const where = `${g.country}${g.region ? `-${g.region}` : ''} (${g.ip})`;
-    if (g.api === 'blocked') { bad(`this machine's IP is in ${where}: Polymarket accepts no orders from there (sanctioned region)`); problems++; }
-    else if (g.api === 'close-only') { bad(`this machine's IP is in ${where}: Polymarket's API only lets you close positions from there — run the bot from another country (Ireland, AWS eu-west-1, is the nearest allowed region)`); problems++; }
-    else ok(`this machine's IP is in ${where}: API orders allowed${g.websiteRestricted ? ' (the polymarket.com website is restricted here, the API is not)' : ''}`);
+    if (g.api === 'ok') ok(describeGeo(g));
+    else { bad(describeGeo(g)); problems++; }
   } catch (e) { bad(`region lookup failed: ${(e as Error).message}`); problems++; }
   try {
     if (await gw.closedOnly()) { bad('Polymarket lets this account only close positions (region or account restriction): BUYs will be rejected'); problems++; }

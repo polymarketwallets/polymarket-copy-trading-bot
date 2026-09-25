@@ -15,7 +15,11 @@ const API_CLOSE_ONLY = ['AU', 'BY', 'BE', 'BI', 'BR', 'CA-BC', 'CA-ON', 'CA-AB',
 /** close-only on the website only: the API — and so this bot — can still open positions */
 const WEBSITE_ONLY = ['IE', 'JP', 'MT', 'NL', 'KR'];
 
-export type GeoVerdict = { api: 'ok' | 'close-only' | 'blocked'; country: string; region: string; ip: string; websiteRestricted: boolean };
+/**
+ * `unlisted`: the endpoint reports a restriction for a region missing from the lists above — Polymarket
+ * has restricted somewhere new since this release; treated as close-only until the lists are updated.
+ */
+export type GeoVerdict = { api: 'ok' | 'close-only' | 'blocked'; country: string; region: string; ip: string; websiteRestricted: boolean; unlisted: boolean };
 
 export function classifyGeo(country: string, region: string): GeoVerdict['api'] | 'website-only' | 'ok' {
   const c = country.toUpperCase();
@@ -30,9 +34,22 @@ export function classifyGeo(country: string, region: string): GeoVerdict['api'] 
 export async function checkGeo(fetchImpl: typeof fetch = fetch): Promise<GeoVerdict> {
   const r = await fetchImpl(GEOBLOCK_URL, { signal: AbortSignal.timeout(10_000) });
   if (!r.ok) throw new Error(`geoblock lookup → HTTP ${r.status}`);
-  const b = (await r.json()) as { ip?: string; country?: string; region?: string };
+  const b = (await r.json()) as { blocked?: unknown; ip?: string; country?: string; region?: string };
   const country = String(b.country ?? ''), region = String(b.region ?? '');
   if (!country) throw new Error('geoblock lookup returned no country');
+  if (typeof b.blocked !== 'boolean') throw new Error('geoblock lookup returned no blocked flag');
   const k = classifyGeo(country, region);
-  return { api: k === 'website-only' ? 'ok' : k, country, region, ip: String(b.ip ?? ''), websiteRestricted: k !== 'ok' };
+  const unlisted = k === 'ok' && b.blocked;
+  const api = unlisted ? 'close-only' : k === 'website-only' ? 'ok' : k;
+  return { api, country, region, ip: String(b.ip ?? ''), websiteRestricted: k !== 'ok' || b.blocked, unlisted };
+}
+
+/** one line saying what this region allows, shared by `check` and `run` */
+export function describeGeo(g: GeoVerdict): string {
+  const where = `this machine's IP is in ${g.country}${g.region ? `-${g.region}` : ''}${g.ip ? ` (${g.ip})` : ''}`;
+  const move = 'run the bot from another country (Ireland, AWS eu-west-1, is the nearest allowed region)';
+  if (g.api === 'blocked') return `${where}: Polymarket accepts no orders at all from there, closing positions included — ${move}`;
+  if (g.unlisted) return `${where}: Polymarket reports this region as restricted and it is not on this bot's list — assume the API only lets you close positions; ${move}`;
+  if (g.api === 'close-only') return `${where}: Polymarket's API only lets you close positions from there, BUYs are rejected — ${move}`;
+  return `${where}: API orders allowed${g.websiteRestricted ? ' (the polymarket.com website is restricted here, the API is not)' : ''}`;
 }
