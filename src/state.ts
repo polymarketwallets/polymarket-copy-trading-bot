@@ -2,6 +2,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, u
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { RotatingFile } from './files.js';
+import { redact } from './secrets.js';
 
 /** a busy trader yields thousands of decisions a day: keep the newest ~120 MB */
 const DECISIONS_MAX_BYTES = 20 * 1024 * 1024;
@@ -242,7 +243,8 @@ export class BotState {
   logDecision(entry: Record<string, unknown>): void {
     // `at` is the log's own timestamp: no field of an entry may overwrite it
     const { at: _dropped, ...rest } = entry;
-    this.decisions.append(`${JSON.stringify({ at: new Date().toISOString(), ...rest }, (_, v) => (typeof v === 'bigint' ? v.toString() : v))}\n`);
+    // reasons quote API and signer errors: no credential they might echo may land in the file
+    this.decisions.append(`${JSON.stringify(redact({ at: new Date().toISOString(), ...rest }), (_, v) => (typeof v === 'bigint' ? v.toString() : v))}\n`);
   }
 }
 

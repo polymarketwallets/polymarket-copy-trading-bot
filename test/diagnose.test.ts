@@ -93,6 +93,22 @@ describe('credentials never reach a file', () => {
     expect(text).toBe('{"e":"pw <redacted>","k":["<redacted>","<redacted>","<redacted>"]}');
   });
 
+  it('keeps them out of the decisions file', async () => {
+    const { BotState } = await import('../src/state.js');
+    const dir = mkdtempSync(join(tmpdir(), 'pmw-dec-'));
+    addSecret(KEY);
+    new BotState(dir, 'live').logDecision({ decision: 'buy_rejected', reason: `signer ${KEY.toUpperCase()} refused` });
+    const text = readFileSync(join(dir, 'decisions.live.jsonl'), 'utf8');
+    expect(text).not.toContain(KEY.slice(2).toUpperCase());
+    expect(text).toContain('signer <redacted> refused');
+  });
+
+  it('registers the keys of every config it loads, whatever the environment calls them', () => {
+    const { dir } = setup();
+    loadConfig(join(dir, 'config.yaml'), { PMW_API_KEY: PMW, POLY_PRIVATE_KEY: KEY });
+    expect(redactText(`${PMW} ${KEY}`)).toBe('<redacted> <redacted>');
+  });
+
   it('never treats a short value as a secret: it would blank out ordinary text', () => {
     addConfigSecrets(null, { MY_TOKEN: 'abc', PATH: '/usr/bin/longenough' });
     expect(redactText('abc /usr/bin/longenough')).toBe('abc /usr/bin/longenough');

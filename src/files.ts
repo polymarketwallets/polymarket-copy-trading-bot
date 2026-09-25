@@ -27,24 +27,26 @@ export class RotatingFile {
   }
 
   private rotate(): void {
-    try {
-      if (existsSync(this.aside)) this.shiftIn();
-      renameSync(this.path, this.aside);
-    } catch {
-      this.size = 0; // try again after another maxBytes
-      return;
-    }
-    this.size = 0;
+    this.size = 0; // whatever happens, the next attempt waits for another maxBytes
+    // a piece still set aside must be filed first: moving the live file onto it would overwrite it
+    if (existsSync(this.aside) && !this.shiftIn()) return;
+    try { renameSync(this.path, this.aside); } catch { return; }
     this.shiftIn();
   }
 
-  /** `.rotating` becomes `.1`, the older pieces move up one, the oldest goes */
-  private shiftIn(): void {
+  /**
+   * `.rotating` becomes `.1`. The pieces above it move up only as far as the first free number, and the oldest is
+   * deleted only when there is none — so a shift cut short and retried finds its own gap and deletes nothing more.
+   */
+  private shiftIn(): boolean {
     try {
-      if (existsSync(`${this.path}.${this.keep}`)) unlinkSync(`${this.path}.${this.keep}`);
-      for (let i = this.keep - 1; i >= 1; i--) if (existsSync(`${this.path}.${i}`)) renameSync(`${this.path}.${i}`, `${this.path}.${i + 1}`);
+      let free = 1;
+      while (free <= this.keep && existsSync(`${this.path}.${free}`)) free++;
+      if (free > this.keep) { unlinkSync(`${this.path}.${this.keep}`); free = this.keep; }
+      for (let i = free - 1; i >= 1; i--) renameSync(`${this.path}.${i}`, `${this.path}.${i + 1}`);
       renameSync(this.aside, `${this.path}.1`);
-    } catch { /* left as .rotating: the next rotation finishes it */ }
+      return true;
+    } catch { return false; }
   }
 }
 

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { addConfigSecrets } from './secrets.js';
 import { parse } from 'yaml';
 
 export interface TargetConfig {
@@ -246,5 +247,7 @@ export function loadConfig(path: string, env: NodeJS.ProcessEnv = process.env): 
   // failsafe schema: every scalar stays a string. The default schema reads an unquoted 0x… value — a
   // private key or an address, typically substituted from the environment — as a hex NUMBER, which
   // destroys it. Numbers are converted by buildConfig's own validation, which accepts strings.
-  return buildConfig((parse(substituteEnv(withoutComments, env), { schema: 'failsafe' }) || {}) as Record<string, any>);
+  const cfg = buildConfig((parse(substituteEnv(withoutComments, env), { schema: 'failsafe' }) || {}) as Record<string, any>);
+  addConfigSecrets(cfg, {}); // whatever the keys are called in the environment, nothing printed may show them
+  return cfg;
 }

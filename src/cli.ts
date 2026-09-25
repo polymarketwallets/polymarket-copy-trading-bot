@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkTradingConfig, loadConfig } from './config.js';
@@ -9,7 +9,7 @@ import { consoleLogger, teeLogger } from './log.js';
 import { RotatingFile } from './files.js';
 import { VERSION } from './version.js';
 import { diagnose } from './diagnose.js';
-import { addConfigSecrets } from './secrets.js';
+import { addConfigSecrets, addRawConfigSecrets, redactText } from './secrets.js';
 import { funderMismatch, run } from './run.js';
 import { checkFunder } from './wallets.js';
 import { checkGeo, describeGeo } from './geo.js';
@@ -38,7 +38,22 @@ function arg(name: string, fallback: string): string {
   return i > 0 && process.argv[i + 1] ? process.argv[i + 1]! : fallback;
 }
 
+/**
+ * Nothing this process prints may carry a credential — terminals are captured (pm2, systemd, CI logs): register
+ * what the environment and the raw config hold before anything can fail, and route every console line through
+ * the redactor.
+ */
+function guardConsole(): void {
+  addConfigSecrets(null, process.env);
+  try { addRawConfigSecrets(readFileSync(arg('--config', 'config.yaml'), 'utf8')); } catch { /* no config yet */ }
+  for (const k of ['log', 'info', 'warn', 'error'] as const) {
+    const f = console[k].bind(console);
+    console[k] = (...a: unknown[]) => f(...a.map((x) => (typeof x === 'string' ? redactText(x) : x)));
+  }
+}
+
 async function main() {
+  guardConsole();
   const cmd = process.argv[2];
   if (cmd === 'init') {
     const dest = process.argv[3] ?? 'config.yaml';
@@ -53,7 +68,6 @@ async function main() {
   }
   if (cmd === 'run') {
     const cfg = loadConfig(arg('--config', 'config.yaml'));
-    addConfigSecrets(cfg, process.env);
     const log = teeLogger(consoleLogger(process.argv.includes('--json')), new RotatingFile(join(cfg.dataDir, `bot.${cfg.mode}.log`), 10 * 1024 * 1024, 5));
     log.info(`pmwallets-copytrade ${VERSION}`, { node: process.version, platform: process.platform, arch: process.arch });
     try {
@@ -193,4 +207,5 @@ async function check(path: string, out: (line: string) => void = console.log): P
   return problems ? 1 : 0;
 }
 
-main().catch((e: unknown) => { console.error(`error: ${(e as Error).message}`); process.exit(1); });
+// the first line only: a YAML error goes on to quote the source line, cut short where no value match can see it
+main().catch((e: unknown) => { console.error(`error: ${String((e as Error)?.message ?? e).split('\n')[0]}`); process.exit(1); });
