@@ -190,6 +190,15 @@ describe('credentials never reach a file', () => {
     expect(orders.find((o: any) => o.key === 'new').needsReconcile).toBe('the order id never came back');
   });
 
+  it('does not trip over a line or a state file that is JSON but not an object', async () => {
+    const { dir, env } = setup();
+    writeFileSync(join(dir, 'data', 'decisions.live.jsonl'), '5\nnull\n"x"\n[1]\nnot json\n');
+    writeFileSync(join(dir, 'data', 'state.live.json'), 'null');
+    const b = JSON.parse(gunzipSync(readFileSync(await diagnose(join(dir, 'config.yaml'), async () => 0, { env, outDir: dir }))).toString('utf8'));
+    expect(b.files['decisions.live.jsonl'].trim().split('\n')).toHaveLength(5);
+    expect(b.files['state.live.json']).toContain('before 0.1.4');
+  });
+
   it('walks a self-referencing alias once, however it fans out', () => {
     const t = Date.now();
     addRawConfigSecrets('polymarket:\n  apiSecret: &a [*a, *a, *a, loopsecretvalue1]\nx: &b {apiKey: *b, k2: *b, token: [*b, *b]}\n', {});

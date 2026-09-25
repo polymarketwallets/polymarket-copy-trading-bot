@@ -74,20 +74,25 @@ const STRUCTURE = ['at', 'eventId', 'target', 'wallet', 'side', 'role', 'tokenId
   'limit', 'orderId', 'shares', 'fillPrice', 'outcome', 'won', 'pnl', 'payout', 'fee', 'filled', 'avg'];
 const OMITTED = '(written by a release before 0.1.4: text left out)';
 
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
 function decisionsForSupport(text: string): string {
   return text.split('\n').filter(Boolean).map((line) => {
-    let e: Record<string, unknown>;
-    try { e = JSON.parse(line); } catch { return JSON.stringify({ note: OMITTED }); }
+    let e: unknown;
+    try { e = JSON.parse(line); } catch { e = null; }
+    if (!isObject(e)) return JSON.stringify({ note: OMITTED });
     if (e['v']) return line;
     return JSON.stringify({ ...Object.fromEntries(STRUCTURE.filter((k) => k in e).map((k) => [k, e[k]])), note: OMITTED });
   }).join('\n') + '\n';
 }
 
 function stateForSupport(text: string): string {
-  let st: { writtenBy?: string; pendingOrders?: Array<Record<string, unknown>> };
+  let st: unknown;
   try { st = JSON.parse(text); } catch { return OMITTED; }
-  st.pendingOrders = (st.pendingOrders ?? []).map((p) =>
-    p['needsReconcile'] && (!st.writtenBy || p['needsReconcileUnredacted']) ? { ...p, needsReconcile: OMITTED } : p);
+  if (!isObject(st)) return OMITTED;
+  const orders = Array.isArray(st['pendingOrders']) ? st['pendingOrders'] : [];
+  st['pendingOrders'] = orders.map((p) => (isObject(p) && p['needsReconcile'] && (!st['writtenBy'] || p['needsReconcileUnredacted'])
+    ? { ...p, needsReconcile: OMITTED } : p));
   return JSON.stringify(st, null, 1);
 }
 
