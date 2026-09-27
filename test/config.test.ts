@@ -11,6 +11,7 @@ describe('config', () => {
     const c = buildConfig(key);
     expect(c.mode).toBe('dry-run');
     expect(c.copy).toMatchObject({ orderSizeUsdc: 10, maxBuysPerOutcome: 3, minPrice: 0.05, maxPrice: 0.95, minBookDepthUsdc: 50 });
+    expect(c.pmwallets.takeover, 'never take another client\'s stream unless asked').toBe(false);
   });
   it('refuses live mode without a key, without an explicit account type, or without the funder address', () => {
     const pk = 'ab'.repeat(32);
@@ -51,7 +52,7 @@ describe('the shared config contract (the Python suite checks the same file)', (
     const root = new URL('../testdata/', import.meta.url);
     const c = loadConfig(new URL('config-contract.yaml', root).pathname, {});
     const expected = JSON.parse(readFileSync(new URL('config-contract.expected.json', root), 'utf8'));
-    const got = { mode: c.mode, polymarket: c.polymarket, targets: c.targets, copy: c.copy, risk: c.risk, dataDir: c.dataDir };
+    const got = { mode: c.mode, pmwallets: { takeover: c.pmwallets.takeover }, polymarket: c.polymarket, targets: c.targets, copy: c.copy, risk: c.risk, dataDir: c.dataDir };
     expect(JSON.parse(JSON.stringify(got))).toEqual(expected);
   });
 });

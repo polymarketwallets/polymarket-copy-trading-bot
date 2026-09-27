@@ -2,6 +2,7 @@
 mode: live
 pmwallets:
   apiKey: pmw_contract_key
+  takeover: true
 polymarket:
   privateKey: 0xabababababababababababababababababababababababababababababababab   # unquoted 0x…: must stay a string
   signatureType: 2

@@ -86,8 +86,10 @@ support@pmwallets.com。文件里有机器人版本、`check` 结果、去掉密
 实测延迟：https://pmwallets.com/zh/latency。
 
 **每个账户只有一条推送流，机器人优先。** PMWallets 每个账户只保留一条 WebSocket。用 API key 建立的连接（机器人）
-优先：pmwallets.com 上的实时推送页永远不会抢走机器人的流 —— 机器人在线时，推送页会提示并且不连接。同一个账户上的
-两个机器人之间仍是后连的顶掉先连的，所以一个账户只跑一个机器人。
+优先：pmwallets.com 上的实时推送页永远不会抢走机器人的流 —— 机器人在线时，推送页会提示并且不连接。两个 API 连接之间
+**先连上的保留这条流**：同一个账户上的第二个机器人（另一把 key，或者同一个机器人启动了两次）会被拒绝，并报错退出。
+要把流有意地换给新机器人，就在新的那个上设置 `pmwallets.takeover: true` —— 旧的会收到「被接管」并停止。机器人自己网络
+闪断后的重连不需要这个设置。PMWallets 重启推送服务时，机器人会立刻重连，并补发断线期间漏掉的成交。
 
 ## 配置
 
@@ -146,6 +148,7 @@ $0，说明类型或地址填错了。Polymarket 还限制部分地区交易；�
 | `mode` | `dry-run` | `dry-run` 只记录每个决策，按盘口最优价模拟成交；`live` 真实下单。 |
 | `pmwallets.apiKey` | —（必填） | PMWallets API key（`pmw_…`，在 [pmwallets.com/keys](https://pmwallets.com/keys) 创建）。 |
 | `pmwallets.baseUrl` | `https://api.pmwallets.com` | PMWallets API 地址。 |
+| `pmwallets.takeover` | `false` | 从当前占着这个账户推送流的客户端手里接管（对方会停止）。默认：对方在线时拒绝启动。 |
 | `polymarket.signatureType` | — | 账户类型 0–3，见上文。没有默认值：`mode: live` 和 `check` 必填。 |
 | `polymarket.privateKey` | — | 签名订单用的私钥。实盘必填。 |
 | `polymarket.funderAddress` | — | 存放资金的地址。实盘必填（`signatureType` 为 0 时可不填）。 |

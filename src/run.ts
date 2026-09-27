@@ -95,11 +95,14 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     store: new FileStateStore(join(cfg.dataDir, `stream.${cfg.mode}.json`)),
     onFill: engine.onFill,
     wsOptions: agent ? { agent } : undefined,
+    takeover: cfg.pmwallets.takeover,
     onEvent: (e: StreamEvent) => {
       if (e.type === 'hello') log.info('connected to the PMWallets fill stream', { session: e.session });
       else if (e.type === 'gap') log.warn('missed fills detected; replaying from the last one handled', { reason: e.reason, fromBlock: e.fromBlock });
       else if (e.type === 'replayed' && e.delivered) log.info('replay done', { delivered: e.delivered });
-      else if (e.type === 'replaced') log.warn('another bot using this API account took over the stream (one per account; the newest API connection wins) — stop the other one');
+      else if (e.type === 'replaced') log.error('another client of this PMWallets account took the fill stream over (pmwallets.takeover) — this bot stops');
+      else if (e.type === 'blocked') log.error('another client of this PMWallets account already holds the fill stream (one per account; the first one keeps it). Stop it, or set pmwallets.takeover: true to replace it');
+      else if (e.type === 'restarting') log.info('PMWallets is restarting the stream; reconnecting now');
       else if (e.type === 'disconnected') log.warn('stream disconnected; reconnecting', { code: e.code, reason: e.reason || undefined });
       else if (e.type === 'error') log.warn('stream error', { error: e.error.message });
       else if (e.type === 'fatal') { log.error('stream stopped', { error: e.error.message, stack: e.error.stack }); void shutdown(1); }

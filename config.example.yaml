@@ -10,6 +10,7 @@ mode: dry-run
 pmwallets:
   apiKey: ${PMW_API_KEY}                 # from https://pmwallets.com/keys
   # baseUrl: https://api.pmwallets.com
+  # takeover: false                     # true = take this account's fill stream from whichever client holds it (it stops)
 
 polymarket:                              # read in live mode and by `pmwallets-copytrade check`
   # Recommended: a separate account just for the bot — a new MetaMask account, signed up on polymarket.com

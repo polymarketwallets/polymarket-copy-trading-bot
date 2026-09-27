@@ -1,5 +1,6 @@
 {
   "mode": "live",
+  "pmwallets": { "takeover": true },
   "polymarket": { "signatureType": 2, "funderAddress": "0x1111111111111111111111111111111111111111", "privateKey": "0xabababababababababababababababababababababababababababababababab", "clobUrl": "https://clob.polymarket.com" },
   "targets": [
     { "entity": "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" },

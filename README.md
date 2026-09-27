@@ -93,8 +93,11 @@ reports whether your machine's region is allowed. Measured latency: https://pmwa
 
 **One stream per account, and the bot comes first.** PMWallets keeps one WebSocket per account. A connection made
 with an API key (the bot) takes priority: the live-feed page on pmwallets.com never takes the stream from it — while
-the bot is connected the page says so and stays off. Two bots on one account still replace each other (the newest
-wins), so run one bot per account.
+the bot is connected the page says so and stays off. Between two API connections **the first one keeps the stream**:
+a second bot on the same account (another key, or the same bot started twice) is refused and stops with a clear error.
+To move the stream to a new bot on purpose, set `pmwallets.takeover: true` on the new one — the old one is told it was
+replaced and stops. A bot's own reconnects after a network drop never need this. When PMWallets restarts its stream
+service the bot reconnects at once and replays anything it missed.
 
 ## Configuration
 
@@ -163,6 +166,7 @@ when the account may only close positions.
 | `mode` | `dry-run` | `dry-run` logs every decision and simulates fills at the best price on the book; `live` sends real orders. |
 | `pmwallets.apiKey` | — (required) | Your PMWallets API key (`pmw_…`, from [pmwallets.com/keys](https://pmwallets.com/keys)). |
 | `pmwallets.baseUrl` | `https://api.pmwallets.com` | PMWallets API endpoint. |
+| `pmwallets.takeover` | `false` | Take the account's fill stream over from whichever client holds it (that client stops). Default: refuse to start next to it. |
 | `polymarket.signatureType` | — | Account type 0–3, see above. No default: required for `mode: live` and `check`. |
 | `polymarket.privateKey` | — | Key that signs your orders. Required in live mode. |
 | `polymarket.funderAddress` | — | Address that holds your funds. Required in live mode unless `signatureType` is 0. |

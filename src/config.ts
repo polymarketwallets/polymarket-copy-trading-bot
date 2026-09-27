@@ -62,7 +62,8 @@ export interface PolymarketConfig {
 
 export interface Config {
   mode: 'dry-run' | 'live';
-  pmwallets: { apiKey: string; baseUrl: string };
+  /** takeover: replace whichever API client of this account holds the fill stream (default: refuse to start next to it) */
+  pmwallets: { apiKey: string; baseUrl: string; takeover: boolean };
   polymarket: PolymarketConfig;
   /** empty = every entity your PMWallets account subscribes to */
   targets: TargetConfig[];
@@ -136,7 +137,7 @@ function listOf(v: unknown, path: string): unknown[] {
 /** every key the config may contain — anything else is a typo, and a typo must not silently become a default */
 const ALLOWED = {
   top: ['mode', 'pmwallets', 'polymarket', 'targets', 'copy', 'risk', 'dataDir'],
-  pmwallets: ['apiKey', 'baseUrl'],
+  pmwallets: ['apiKey', 'baseUrl', 'takeover'],
   polymarket: ['clobUrl', 'privateKey', 'signatureType', 'funderAddress', 'apiKey', 'apiSecret', 'apiPassphrase'],
   copy: Object.keys(DEFAULTS.copy),
   risk: Object.keys(DEFAULTS.risk),
@@ -170,7 +171,7 @@ export function buildConfig(raw: Record<string, any>): Config {
   const copy: CopyConfig = { ...DEFAULTS.copy, ...copyRaw };
   const c: Config = {
     mode: raw['mode'] ?? DEFAULTS.mode,
-    pmwallets: { apiKey: pmRaw['apiKey'], baseUrl: pmRaw['baseUrl'] ?? 'https://api.pmwallets.com' },
+    pmwallets: { apiKey: pmRaw['apiKey'], baseUrl: pmRaw['baseUrl'] ?? 'https://api.pmwallets.com', takeover: 'takeover' in pmRaw ? pmRaw['takeover'] : false },
     polymarket: { ...DEFAULTS.polymarket, ...polyRaw },
     targets: listOf(raw['targets'], 'targets').map((t: unknown) => (typeof t === 'string' ? { entity: t } : t)) as TargetConfig[],
     copy,
@@ -181,6 +182,11 @@ export function buildConfig(raw: Record<string, any>): Config {
 
   if (c.mode !== 'dry-run' && c.mode !== 'live') throw new Error(`mode must be dry-run or live, got ${shown(c.mode)}`);
   if (!c.pmwallets.apiKey || !/^pmw_/.test(c.pmwallets.apiKey)) throw new Error('pmwallets.apiKey is required (pmw_…, from https://pmwallets.com/keys)');
+  // the loader's failsafe schema keeps every scalar a string, so `true` arrives as 'true'
+  const tk = c.pmwallets.takeover as unknown;
+  if (tk === true || tk === 'true') c.pmwallets.takeover = true;
+  else if (tk === false || tk === 'false') c.pmwallets.takeover = false;
+  else throw new Error('pmwallets.takeover must be true or false');
 
   // validated AND written back as numbers: YAML allows "60" and both implementations must compute with 60
   copy.orderSizeUsdc = num(copy.orderSizeUsdc, 'copy.orderSizeUsdc', 1, 1_000_000);

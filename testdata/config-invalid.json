@@ -104,6 +104,14 @@
   {
    "name": "duplicate key inside a target",
    "yaml": "pmwallets: {apiKey: pmw_a_b}\ntargets:\n  - entity: \"0x1111111111111111111111111111111111111111\"\n    orderSizeUsdc: 5\n    orderSizeUsdc: 500\n"
+  },
+  {
+   "name": "empty pmwallets.takeover",
+   "yaml": "pmwallets:\n  apiKey: pmw_a_b\n  takeover:\n"
+  },
+  {
+   "name": "pmwallets.takeover is not a boolean",
+   "yaml": "pmwallets:\n  apiKey: pmw_a_b\n  takeover: maybe\n"
   }
  ]
 }
