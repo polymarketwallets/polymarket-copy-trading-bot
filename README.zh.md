@@ -98,7 +98,7 @@ support@pmwallets.com。文件里有机器人版本、`check` 结果、去掉密
 
 给机器人**单独开一个账户**，里面只放你愿意让它去交易的钱。这是我们推荐并写成文档的做法，照着一步步来：
 
-> **只有这种方式经过真金白银的实测** —— 用 MetaMask(或其他浏览器钱包)连接 polymarket.com 注册的账户，用这个钱包自己的私钥签名。
+> **这种方式已经过真金白银的实测** —— 用 MetaMask(或其他浏览器钱包)连接 polymarket.com 注册的账户，用这个钱包自己的私钥签名。
 > 邮箱或 Google 注册的账户、较早的 Safe / Proxy 账户以及普通钱包，代码上支持，但我们没有实盘跑过。能新建的话，请按下面的步骤新建，
 > 不要复用那几类账户。
 
@@ -118,7 +118,7 @@ support@pmwallets.com。文件里有机器人版本、`check` 结果、去掉密
 
 ### 已经有账户？判断它是哪种类型（`polymarket.signatureType`）
 
-只有第一行(用 MetaMask 等浏览器钱包连接注册的账户)实盘测过。其余几行按 Polymarket 官方文档写成，但没有用这个机器人实测过：
+第一行(用 MetaMask 等浏览器钱包连接注册的账户)已实盘测过。其余几行按 Polymarket 官方文档写成，但没有用这个机器人实测过：
 请先跑 `check`,再跑 `dry-run`,再用很小的 `copy.orderSizeUsdc` 上实盘，遇到问题发邮件到 support@pmwallets.com。
 
 类型决定用哪把私钥签名、钱放在哪个地址（[Polymarket 官方说明](https://docs.polymarket.com/trading/wallets-auth)）。

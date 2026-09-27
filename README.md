@@ -107,7 +107,7 @@ silently ignored.
 Give the bot **an account of its own**, holding only what you are willing to let it trade. This is the setup we
 recommend and document; follow it step by step:
 
-> **Only this setup has been tested with real money** — a MetaMask (or other browser-wallet) account connected
+> **This setup has been tested with real money** — a MetaMask (or other browser-wallet) account connected
 > on polymarket.com, signing with that wallet's own private key. Accounts made with email or Google, the older
 > Safe / Proxy accounts and plain wallets are supported by the code, but we have not run them live. If you can,
 > make a new account as below rather than reusing one of those.
@@ -131,7 +131,7 @@ never be able to touch money you did not mean to put at risk. The key never leav
 
 ### Already have an account? Which type it is (`polymarket.signatureType`)
 
-Only the first row, for an account signed up by connecting MetaMask or another browser wallet, has been tested
+The first row, for an account signed up by connecting MetaMask or another browser wallet, has been tested
 live. The other rows follow Polymarket's documentation but are untested with this bot: run `check`, then
 `dry-run`, then live with a very small `copy.orderSizeUsdc`, and tell support@pmwallets.com if anything fails.
 
