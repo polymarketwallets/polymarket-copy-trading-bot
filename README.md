@@ -230,6 +230,19 @@ contract cases both implementations must pass — keep it identical in both repo
 - [Ways to follow Polymarket wallets, compared](https://pmwallets.com/compare) — official leaderboard, free trackers, SQL dashboards
 - [FAQ](https://pmwallets.com/faq) · [中文站](https://pmwallets.com/zh)
 
+**Guides**
+
+- [How to set up a Polymarket copy-trading bot](https://pmwallets.com/guides/polymarket-copy-trading-bot-setup) — a dedicated account, a region Polymarket accepts orders from, dry-run first
+- [Polymarket copy-trading risks](https://pmwallets.com/guides/polymarket-copy-trading-risks) — price moving before your order, competing for the same book, copying makers, fees, missed exits
+- [Backtest copy trading before risking money](https://pmwallets.com/guides/polymarket-copy-trading-backtest) — a trader's fill history plus your real delay, slippage and fees
+- [Polymarket order types: GTC, GTD, FOK and FAK](https://pmwallets.com/guides/polymarket-order-types) — and which a bot should use
+- [How to spot a market maker](https://pmwallets.com/guides/polymarket-market-makers) — and why not to copy one
+- [Luck or skill?](https://pmwallets.com/guides/polymarket-one-big-win) — take away the best market and look again
+- [Polymarket win rate](https://pmwallets.com/guides/polymarket-win-rate) — why 100% means nothing without a sample size
+- [Polymarket leaderboards by category](https://pmwallets.com/leaderboard) — sports, crypto, politics, esports and more, ranked from on-chain PnL
+- [Busiest Polymarket markets](https://pmwallets.com/markets) — the 1,000 most-traded markets of the last 30 days and how their traders did
+- [All guides](https://pmwallets.com/guides) · [llms.txt](https://pmwallets.com/llms.txt)
+
 ## Proxies
 
 `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` are honoured for the PMWallets API, the WebSocket and the Polymarket CLOB.
