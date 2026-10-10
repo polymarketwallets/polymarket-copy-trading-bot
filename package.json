@@ -35,7 +35,7 @@
   "homepage": "https://pmwallets.com/copy-trading",
   "license": "MIT",
   "dependencies": {
-    "@polymarket/clob-client-v2": "^1.1.0",
+    "@polymarket/clob-client-v2": "^1.2.0",
     "https-proxy-agent": "^7.0.6",
     "pmwallets": "^0.3.0",
     "undici": "^7.29.1",

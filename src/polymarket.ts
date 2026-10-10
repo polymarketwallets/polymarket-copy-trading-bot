@@ -23,6 +23,8 @@ export interface Market {
   active: boolean;
   acceptingOrders?: boolean;
   endDate?: string;
+  /** the CLOB's `version`: "v1" = a CTF market, "v2" = a Polymarket V2 market; undefined when the CLOB does not say */
+  version?: string;
   tokens: { tokenId: string; outcome: string; winner?: boolean; price?: number }[];
 }
 
@@ -82,6 +84,76 @@ export function classifyPost(resp: unknown): 'answer' | 'rejected' | 'unknown' {
   }
   if (httpStatus >= 400 && httpStatus < 500 && typeof err === 'string' && err.trim()) return 'rejected';
   return 'unknown';
+}
+
+/** Polymarket V2 trades on ExchangeV3 (its shares live in PositionManager, an ERC-1155, not in Conditional Tokens). */
+export const EXCHANGE_V3 = '0xe3333700cA9d93003F00f0F71f8515005F6c00Aa';
+/** the CLOB's asset type for V2 positions (the SDK's AssetType has no member for it yet) */
+export const CONDITIONAL_V2 = 'CONDITIONAL-V2' as AssetType;
+
+/**
+ * What an outcome id is by its shape. A V2 position id is a 256-bit layout:
+ *   moduleId 8 | baseHash 128 | arity 16 | reserved 64 | resolutionChain 16 | conditionIndex 16 | outcomeIndex 8
+ * with moduleId 1 (binary), 2 (neg risk) or 3 (combinatorial) and the reserved bits 0. A CTF token id is a keccak
+ * hash: about 1 in 85 of them starts with 1–3 (real ones do), but all 64 reserved bits being zero as well is ~2^-70.
+ * Every other canonical id counts as CTF — the CLOB lookups are what prove a CTF token exists.
+ *
+ * Only the canonical decimal form is an id here (no sign, leading zeros, whitespace or hex, below 2^256): the SDK
+ * reads any of those as the same number, so `0x01…` or a zero-padded V2 id would pass as "CTF" and be signed as one.
+ * Anything else is `invalid` and is never looked up or traded.
+ */
+export function idKind(tokenId: string): 'ctf' | 'v2' | 'combo' | 'invalid' {
+  if (typeof tokenId !== 'string' || !/^(0|[1-9][0-9]*)$/.test(tokenId)) return 'invalid';
+  const id = BigInt(tokenId);
+  if (id >> 256n !== 0n) return 'invalid';
+  const moduleId = id >> 248n;
+  if (moduleId < 1n || moduleId > 3n || ((id >> 40n) & 0xffff_ffff_ffff_ffffn) !== 0n) return 'ctf';
+  return moduleId === 3n ? 'combo' : 'v2';
+}
+
+/**
+ * Which order path an outcome of this market takes. The market's own `version` decides; the id's shape must agree
+ * with it, or nothing is traded (a wrong guess signs for the wrong exchange). A market the CLOB gives no version
+ * keeps the CTF path that every market had before V2, but only for an id that is not V2-shaped.
+ */
+export function marketProtocol(market: Market, tokenId: string): { ok: true; v2: boolean } | { ok: false; reason: string } {
+  const kind = idKind(tokenId);
+  const version = market.version?.toLowerCase();
+  if (kind === 'invalid') return { ok: false, reason: 'not a canonical decimal id' };
+  if (kind === 'combo') return { ok: false, reason: 'combinatorial position (RFQ only, not on the order book)' };
+  if (version === 'v2') return kind === 'v2' ? { ok: true, v2: true } : { ok: false, reason: 'V2 market, but the id is not a V2 position id' };
+  if (version === 'v1') return kind === 'ctf' ? { ok: true, v2: false } : { ok: false, reason: 'CTF market, but the id is a V2 position id' };
+  if (version === undefined) return kind === 'ctf' ? { ok: true, v2: false } : { ok: false, reason: 'V2 position id, but the CLOB does not say the market is V2' };
+  return { ok: false, reason: `unknown market version ${JSON.stringify(market.version)}` };
+}
+
+/** Refuses an id that is not in canonical decimal form (see idKind), before it reaches a lookup or the SDK. */
+function assertCanonical(tokenId: string): 'ctf' | 'v2' | 'combo' {
+  const kind = idKind(tokenId);
+  if (kind === 'invalid') throw new Error(`${JSON.stringify(String(tokenId).slice(0, 24))} is not a canonical decimal token id`);
+  return kind;
+}
+
+/**
+ * Refuses an id that does not fit the protocol: a combo never, a V2 position only with `v2` true, a CTF token only
+ * with `v2` false. `v2` omitted (callers from before V2) means CTF, so such a caller can never trade a V2 position.
+ */
+function assertAsset(tokenId: string, v2: boolean | undefined): void {
+  const kind = assertCanonical(tokenId);
+  if (kind === 'combo') throw new Error(`${tokenId.slice(0, 16)}… is a combinatorial position (RFQ only, not on the order book)`);
+  if ((v2 === true) !== (kind === 'v2')) throw new Error(`${tokenId.slice(0, 16)}… is not a ${v2 ? 'V2 position' : 'CTF token'} id`);
+}
+
+/** The order's asset: `positionID` signs for ExchangeV3, `tokenID` for the CTF exchanges. Throws on a mismatch. */
+export function orderAsset(tokenId: string, v2?: boolean): { tokenID: string } | { positionID: string } {
+  assertAsset(tokenId, v2);
+  return v2 ? { positionID: tokenId } : { tokenID: tokenId };
+}
+
+/** The pUSD approval the CLOB reports for ExchangeV3: missing = it did not list ExchangeV3 at all. */
+export function exchangeV3Approval(allowances: Record<string, bigint>): 'approved' | 'zero' | 'missing' {
+  const hit = Object.entries(allowances).find(([k]) => k.toLowerCase() === EXCHANGE_V3.toLowerCase());
+  return !hit ? 'missing' : hit[1] > 0n ? 'approved' : 'zero';
 }
 
 const GAMMA_URL = 'https://gamma-api.polymarket.com';
@@ -150,6 +222,7 @@ export class PolymarketGateway {
   }
 
   async conditionIdFor(tokenId: string): Promise<string> {
+    assertCanonical(tokenId);
     const hit = this.tokenToCondition.get(tokenId);
     if (hit) return hit;
     const r = await this.getJson(`/markets-by-token/${encodeURIComponent(tokenId)}`);
@@ -201,6 +274,7 @@ export class PolymarketGateway {
       active: bool(m.active, true),
       acceptingOrders: m.accepting_orders === undefined ? undefined : bool(m.accepting_orders, true),
       endDate: typeof m.end_date_iso === 'string' && m.end_date_iso ? m.end_date_iso : undefined,
+      version: typeof m.version === 'string' && m.version ? m.version : undefined,
       tokens: (m.tokens ?? []).map((t: any) => ({
         tokenId: String(t.token_id ?? ''), outcome: String(t.outcome ?? ''),
         winner: typeof t.winner === 'boolean' ? t.winner : undefined,
@@ -216,6 +290,7 @@ export class PolymarketGateway {
    * caller reads levels[0] as the best, so normalise here: asks ascending, bids descending.
    */
   async orderbook(tokenId: string): Promise<Book> {
+    assertCanonical(tokenId);
     const ob = await this.getJson(`/book?token_id=${encodeURIComponent(tokenId)}`);
     if (!Array.isArray(ob?.bids) || !Array.isArray(ob?.asks)) throw new Error(`malformed book for ${tokenId.slice(0, 16)}…`);
     const lv = (l: any): Level => ({ price: toMicro(l.price), size: toMicro(l.size) });
@@ -241,8 +316,9 @@ export class PolymarketGateway {
    * Share-denominated createOrder + postOrder, NOT createAndPostMarketOrder: a USDC-budget market BUY
    * can overfill when the book improves between our read and the match (limit 0.21, $10.50 budget,
    * ask 0.20 → 52.5 shares instead of 50). A share-based FOK is exactly N or 0.
+   * `v2`: a Polymarket V2 position (see marketProtocol) — signed for ExchangeV3.
    */
-  async buyFok(tokenId: string, conditionId: string, limit: bigint, shares: bigint): Promise<OrderOutcome> {
+  async buyFok(tokenId: string, conditionId: string, limit: bigint, shares: bigint, v2?: boolean): Promise<OrderOutcome> {
     const clob = this.requireClob();
     const price = clampLimit(limit, this.tickSizes.get(tokenId));
     const size = roundBuyShares(shares, price);
@@ -250,7 +326,7 @@ export class PolymarketGateway {
     const since = Date.now() - 30_000;
     let signed;
     try {
-      signed = await clob.createOrder({ tokenID: tokenId, price: fromMicro(price), size: fromMicro(size), side: Side.BUY });
+      signed = await clob.createOrder({ ...orderAsset(tokenId, v2), price: fromMicro(price), size: fromMicro(size), side: Side.BUY });
     } catch (e) {
       return this.failed(`sign_error: ${(e as Error).message}`.slice(0, 300)); // nothing left this machine
     }
@@ -267,7 +343,7 @@ export class PolymarketGateway {
    * SELL up to `shares`, taking whatever crosses at `limit` or better, cancelling the rest (FAK). A
    * partial exit beats none; the residual is sold on the target's next SELL or redeemed at settlement.
    */
-  async sellFak(tokenId: string, conditionId: string, limit: bigint, shares: bigint): Promise<OrderOutcome> {
+  async sellFak(tokenId: string, conditionId: string, limit: bigint, shares: bigint, v2?: boolean): Promise<OrderOutcome> {
     const clob = this.requireClob();
     const price = clampLimit(limit, this.tickSizes.get(tokenId));
     const size = roundSellShares(shares);
@@ -275,7 +351,7 @@ export class PolymarketGateway {
     const since = Date.now() - 30_000;
     let signed;
     try {
-      signed = await clob.createMarketOrder({ tokenID: tokenId, price: fromMicro(price), amount: fromMicro(size), side: Side.SELL, orderType: OrderType.FAK });
+      signed = await clob.createMarketOrder({ ...orderAsset(tokenId, v2), price: fromMicro(price), amount: fromMicro(size), side: Side.SELL, orderType: OrderType.FAK });
     } catch (e) {
       return this.failed(`sign_error: ${(e as Error).message}`.slice(0, 300));
     }
@@ -351,14 +427,16 @@ export class PolymarketGateway {
     return attributeFills(Array.isArray(trades) ? trades : [], orderId, sinceMs, match);
   }
 
-  /** Outcome-token balance of the trading account (1e-6 shares). */
-  async tokenBalance(tokenId: string): Promise<bigint> {
+  /** Outcome-token balance of the trading account (1e-6 shares). V2 positions are their own asset type. */
+  async tokenBalance(tokenId: string, v2?: boolean): Promise<bigint> {
     const clob = this.requireClob();
+    assertAsset(tokenId, v2);
+    const asset = { asset_type: v2 ? CONDITIONAL_V2 : AssetType.CONDITIONAL, token_id: tokenId };
     // The CLOB caches balances server-side: make it re-read the chain first. If that fails, the reading
     // would be the same possibly-stale cache — fail the read instead of letting it count as a fresh one.
-    const upd: any = await clob.updateBalanceAllowance({ asset_type: AssetType.CONDITIONAL, token_id: tokenId });
+    const upd: any = await clob.updateBalanceAllowance(asset);
     if (upd && typeof upd === 'object' && (upd.error || upd.errorMsg)) throw new Error(`balance refresh failed: ${String(upd.errorMsg || upd.error).slice(0, 200)}`);
-    const r: any = await clob.getBalanceAllowance({ asset_type: AssetType.CONDITIONAL, token_id: tokenId });
+    const r: any = await clob.getBalanceAllowance(asset);
     if (r?.error || r?.errorMsg) throw new Error(String(r.errorMsg || r.error));
     return r?.balance ? (String(r.balance).includes('.') ? toMicro(r.balance) : BigInt(r.balance)) : 0n;
   }

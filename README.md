@@ -74,6 +74,15 @@ rejected order.
   apply: if the trader left while the bot was down, it still gets out;
 - order: **fill-and-kill** at the best bid — a partial exit beats none, and the rest is retried.
 
+**Polymarket V2 markets** (canary markets now; every new market from 2026-11-02)
+- the same rules, on Polymarket's new exchange (ExchangeV3, with the shares held in PositionManager instead of
+  Conditional Tokens). Which exchange a market trades on comes from the CLOB market's `version`, and it must agree
+  with the shape of the outcome id (a V2 position id is not a hash). If they disagree — or the CLOB does not say for
+  an id shaped like a V2 position — the BUY is skipped (`skipped_market_version`) and an exit is kept and retried:
+  the bot never guesses which exchange to sign for;
+- **combos** (multi-leg parlays) are quoted by RFQ and never trade on the order book: always skipped (`skipped_combo`);
+- they need approvals of their own — see the account section below.
+
 **Safety**
 - **dry-run by default**; live needs an explicit `mode: live`;
 - **at most once**: a fill is marked decided in the state file *before* any order is sent, so a crash can miss a
@@ -155,6 +164,14 @@ bot does not do this for you (see Polymarket's
 [approval example](https://github.com/Polymarket/py-clob-client-v2/blob/main/examples/account/approve_allowances.py)).
 Accounts made on polymarket.com (types 1–3) are set up by Polymarket.
 
+**Polymarket V2 markets need two more approvals**: the approvals above do not cover ExchangeV3
+(`0xe3333700cA9d93003F00f0F71f8515005F6c00Aa`). To buy, pUSD (`0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`) must
+`approve` ExchangeV3; to sell, PositionManager (`0x006F54F7f9A22e0000CC2AB60031000000ae9fEF`) must
+`setApprovalForAll(ExchangeV3, true)` ([Polymarket: V2 migration](https://docs.polymarket.com/migrate/polymarket-v2/api-integrations)).
+A plain wallet sends both itself (the example above does not include them yet); on an account made on
+polymarket.com, accept the approval prompt polymarket.com shows. `check` reports the pUSD approval for ExchangeV3 on a
+line of its own. It cannot see the PositionManager one: without it, SELLs in V2 markets are rejected and retried.
+
 Whatever the type, run `pmwallets-copytrade check` before `mode: live`. A balance of $0 while polymarket.com shows
 money means the type or the address is wrong. Polymarket also restricts trading from some regions; `check` reports
 when the account may only close positions.
@@ -219,6 +236,13 @@ npm run build
 
 The same `config.yaml`, state files and lock file work with the Python version. `testdata/` holds the
 contract cases both implementations must pass — keep it identical in both repositories.
+
+Using `PolymarketGateway` as a library: `buyFok`, `sellFak` and `tokenBalance` take an optional last argument `v2`.
+`true` trades a Polymarket V2 position through ExchangeV3; omitted or `false` keeps the CTF path, so code written before
+V2 works unchanged for CTF tokens. A V2 position id without `true`, or a combo id with any value, is refused before
+anything is signed or sent (`tokenBalance` throws). The `Exchange` interface carries the same optional argument.
+Token ids must be canonical decimal strings — no hex, sign, whitespace or leading zeros: every gateway method refuses
+any other form before a lookup or the SDK sees it, and the bot skips such a fill (`skipped_invalid_token_id`).
 
 ## Resources
 

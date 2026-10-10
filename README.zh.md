@@ -70,6 +70,14 @@ support@pmwallets.com。文件里有机器人版本、`check` 结果、去掉密
   退出了，机器人照样要退；
 - 下单：在最优买价 **FAK**（能成交多少算多少）—— 部分退出好过完全退不出，剩下的继续重试。
 
+**Polymarket V2 市场**（目前是灰度市场；2026-11-02 起所有新市场）
+- 规则不变，只是走 Polymarket 的新交易所（ExchangeV3，份额存放在 PositionManager 而不是 Conditional Tokens）。
+  市场走哪个交易所以 CLOB 市场信息里的 `version` 为准，并且必须与结果 id 的形状一致（V2 position id 不是哈希）。
+  两者不一致 —— 或者 id 形如 V2 position、CLOB 却没说是 V2 —— 买入就跳过（`skipped_market_version`），
+  退出则保留并重试：机器人绝不猜该向哪个交易所签名；
+- **组合单**（多腿串关）通过 RFQ 报价，从不在订单簿上交易：一律跳过（`skipped_combo`）；
+- 它们需要单独的授权 —— 见下面的账户一节。
+
 **安全**
 - **默认 dry-run**，实盘必须显式写 `mode: live`；
 - **最多执行一次**：一笔成交在发出任何订单**之前**就写进状态文件标记为已决策，崩溃最多漏跟一次，绝不会重复下单。
@@ -138,6 +146,13 @@ support@pmwallets.com。文件里有机器人版本、`check` 结果、去掉密
 Polymarket 的[授权示例](https://github.com/Polymarket/py-clob-client-v2/blob/main/examples/account/approve_allowances.py)）。
 在 polymarket.com 上创建的账户（类型 1–3）由 Polymarket 设置好。
 
+**Polymarket V2 市场还需要两项授权**：上面的授权不包括 ExchangeV3（`0xe3333700cA9d93003F00f0F71f8515005F6c00Aa`）。
+买入需要 pUSD（`0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`）对 ExchangeV3 `approve`；卖出需要 PositionManager
+（`0x006F54F7f9A22e0000CC2AB60031000000ae9fEF`）`setApprovalForAll(ExchangeV3, true)`
+（[Polymarket：V2 迁移](https://docs.polymarket.com/migrate/polymarket-v2/api-integrations)）。普通钱包要自己发这两笔
+（上面的授权示例目前还不包含它们）；polymarket.com 上创建的账户，在 polymarket.com 弹出授权提示时确认即可。
+`check` 会单独一行报告 pUSD 对 ExchangeV3 的授权；它看不到 PositionManager 那一项：缺了它，V2 市场的卖出会被拒绝并重试。
+
 不管哪种类型，改成 `mode: live` 之前都先运行 `pmwallets-copytrade check`。如果 polymarket.com 上有钱、`check` 却显示余额
 $0，说明类型或地址填错了。Polymarket 还限制部分地区交易；账户只能平仓时，`check` 会提示。
 
@@ -200,6 +215,12 @@ npm run build
 ```
 
 `config.yaml`、状态文件和锁文件与 Python 版通用。`testdata/` 是两个实现都必须通过的契约用例 —— 两个仓库里保持一致。
+
+把 `PolymarketGateway` 当库用：`buyFok`、`sellFak`、`tokenBalance` 多了一个可选的最后参数 `v2`。`true` 表示经 ExchangeV3
+交易 Polymarket V2 position；不传或 `false` 仍走 CTF，所以 V2 之前写的代码对 CTF token 照常可用。V2 position id 不带
+`true`、或者组合单 id（无论传什么），都会在签名和发送之前被拒绝（`tokenBalance` 抛错）。`Exchange` 接口的参数同样可选。
+token id 必须是规范的十进制字符串（不能是十六进制、不能带符号、空白或前导零）：其他写法在查询或交给 SDK 之前就被网关的每个方法拒绝，
+机器人对这类成交直接跳过（`skipped_invalid_token_id`）。
 
 ## 相关链接
 

@@ -1,0 +1,43 @@
+{
+  "_doc": "How each implementation must classify an outcome id and pick its order path. `ids`: idKind(id) — v2 = a Polymarket V2 position id of module 1 (binary) or 2 (neg risk), combo = module 3 (combinatorial, never copied), ctf = any other canonical id (a CTF token id is a keccak hash), invalid = not a canonical decimal uint256 (no sign, no leading zeros, no whitespace, no hex, below 2^256): never traded, never looked up, refused by the gateway before the SDK is called. `markets`: marketProtocol for a CLOB market with this `version` (null = the CLOB does not say) — v2 = send positionID (ExchangeV3), ctf = send tokenID, skip = do not trade.",
+  "ids": [
+    { "name": "native binary YES (polyv2zec-updown-15m-1791633600)", "id": "456322662693127080402085893806415780684933579476723864069977356327020658688", "kind": "v2" },
+    { "name": "native binary NO (outcome byte 1)", "id": "456322662693127080402085893806415780684933579476723864069977356327020658689", "kind": "v2" },
+    { "name": "migrated binary mirror (xi-jinping-out-before-2027 YES)", "id": "895257453734540292493143124621755605615887197499956109032745153687078305792", "kind": "v2" },
+    { "name": "neg-risk position (module 2, synthetic)", "id": "936790166394979422314973074578174421716655008665765835395575639343294841601", "kind": "v2" },
+    { "name": "combo YES (module 3, seen in Data API trades)", "id": "1628948707922995775031622509772078765406110626872621424817699628095377506304", "kind": "combo" },
+    { "name": "CTF token whose top byte is 3 (Solana Up or Down), reserved bits set", "id": "1386862814961340478686079836990299099517617306127454231647063425704780395278", "kind": "ctf" },
+    { "name": "CTF token", "id": "69515744437473089728151261939146426925489297565662421305942992110046228478629", "kind": "ctf" },
+    { "name": "module 1 with a reserved bit set", "id": "456322662693127080402085893806415780684933579476723864069977357426532286464", "kind": "ctf" },
+    { "name": "unknown module 4", "id": "1809251394333065553493296640760748560434641497679854427383075757431581573120", "kind": "ctf" },
+    { "name": "zero", "id": "0", "kind": "ctf" },
+    { "name": "largest uint256", "id": "115792089237316195423570985008687907853269984665640564039457584007913129639935", "kind": "ctf" },
+    { "name": "above 256 bits", "id": "115792089237316195423570985008687907853269984665640564039457584007913129639936", "kind": "invalid" },
+    { "name": "not a decimal number", "id": "0x0102", "kind": "invalid" },
+    { "name": "V2 id in hex", "id": "0x010244fc458730a0481ec6b69383fde885000000000000000000000000000000", "kind": "invalid" },
+    { "name": "combo id in hex", "id": "0x0399f3c9aa7360ee8fd03463733e451b46000000000000000000000000000000", "kind": "invalid" },
+    { "name": "V2 id zero-padded", "id": "0456322662693127080402085893806415780684933579476723864069977356327020658688", "kind": "invalid" },
+    { "name": "combo id zero-padded to 79 digits", "id": "001628948707922995775031622509772078765406110626872621424817699628095377506304", "kind": "invalid" },
+    { "name": "V2 id with surrounding whitespace", "id": " 456322662693127080402085893806415780684933579476723864069977356327020658688\n", "kind": "invalid" },
+    { "name": "combo id with surrounding whitespace", "id": "\t1628948707922995775031622509772078765406110626872621424817699628095377506304 ", "kind": "invalid" },
+    { "name": "CTF-shaped id with a leading zero", "id": "0123", "kind": "invalid" },
+    { "name": "signed", "id": "+1001", "kind": "invalid" },
+    { "name": "negative", "id": "-1001", "kind": "invalid" },
+    { "name": "empty", "id": "", "kind": "invalid" }
+  ],
+  "markets": [
+    { "name": "V2 market, V2 id", "version": "v2", "id": "456322662693127080402085893806415780684933579476723864069977356327020658688", "expect": "v2" },
+    { "name": "V2 market, upper-case version", "version": "V2", "id": "456322662693127080402085893806415780684933579476723864069977356327020658688", "expect": "v2" },
+    { "name": "V2 market, CTF-shaped id", "version": "v2", "id": "69515744437473089728151261939146426925489297565662421305942992110046228478629", "expect": "skip" },
+    { "name": "CTF market, CTF id", "version": "v1", "id": "69515744437473089728151261939146426925489297565662421305942992110046228478629", "expect": "ctf" },
+    { "name": "CTF market, CTF id with top byte 3", "version": "v1", "id": "1386862814961340478686079836990299099517617306127454231647063425704780395278", "expect": "ctf" },
+    { "name": "CTF market, V2 id (a migrated mirror)", "version": "v1", "id": "895257453734540292493143124621755605615887197499956109032745153687078305792", "expect": "skip" },
+    { "name": "no version, CTF id (the CLOB before V2)", "version": null, "id": "69515744437473089728151261939146426925489297565662421305942992110046228478629", "expect": "ctf" },
+    { "name": "no version, V2 id", "version": null, "id": "456322662693127080402085893806415780684933579476723864069977356327020658688", "expect": "skip" },
+    { "name": "unknown version", "version": "v3", "id": "456322662693127080402085893806415780684933579476723864069977356327020658688", "expect": "skip" },
+    { "name": "combo, whatever the market says", "version": "v2", "id": "1628948707922995775031622509772078765406110626872621424817699628095377506304", "expect": "skip" },
+    { "name": "V2 market, zero-padded V2 id", "version": "v2", "id": "0456322662693127080402085893806415780684933579476723864069977356327020658688", "expect": "skip" },
+    { "name": "no version, V2 id in hex", "version": null, "id": "0x010244fc458730a0481ec6b69383fde885000000000000000000000000000000", "expect": "skip" },
+    { "name": "CTF market, non-canonical id", "version": "v1", "id": "0123", "expect": "skip" }
+  ]
+}

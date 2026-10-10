@@ -21,14 +21,14 @@ function fill(o: Partial<Fill> = {}): Fill {
   return {
     eventId: `137:${n}:0xh:0xtx${n}:1`, chain: 137, entityId: T1, wallet: T1, ts: '2026-09-24 11:59:50',
     block: 1000 + n, blockHash: '0xh', txHash: `0xtx${n}`, logIndex: 1, exchange: 'pm_ctf_v2',
-    side: 'BUY', role: 'taker', tokenId: 'TOK', price: '0.500000', shares: '100000000', usdc: '50000000', fee: '0', ...o,
+    side: 'BUY', role: 'taker', tokenId: '1001', price: '0.500000', shares: '100000000', usdc: '50000000', fee: '0', ...o,
   };
 }
 
 class FakeExchange implements Exchange {
   canTrade = true;
-  market_: Market = { conditionId: 'CID', question: 'Will it?', closed: false, active: true, acceptingOrders: true, endDate: '2026-12-31T00:00:00Z', tokens: [{ tokenId: 'TOK', outcome: 'Yes' }] };
-  book: Book = { tokenId: 'TOK', asks: [{ price: toMicro('0.51'), size: toMicro('1000') }], bids: [{ price: toMicro('0.49'), size: toMicro('1000') }], tickSize: toMicro('0.01'), minOrderSize: toMicro('5') };
+  market_: Market = { conditionId: 'CID', question: 'Will it?', closed: false, active: true, acceptingOrders: true, endDate: '2026-12-31T00:00:00Z', tokens: [{ tokenId: '1001', outcome: 'Yes' }] };
+  book: Book = { tokenId: '1001', asks: [{ price: toMicro('0.51'), size: toMicro('1000') }], bids: [{ price: toMicro('0.49'), size: toMicro('1000') }], tickSize: toMicro('0.01'), minOrderSize: toMicro('5') };
   buys: { limit: bigint; shares: bigint }[] = [];
   sells: { limit: bigint; shares: bigint }[] = [];
   buyResult: (shares: bigint, limit: bigint) => OrderOutcome = (shares, limit) => ({ orderId: 'o1', status: 'filled', shares, usdc: (shares * limit) / 1_000_000n, feeUsdc: 0n, netShares: shares });
@@ -37,13 +37,15 @@ class FakeExchange implements Exchange {
   lateFill: TradeFill = { shares: 0n, usdc: 0n, feeUsdc: 0n, feeShares: 0n, orderIds: [] };
   fillsCalls: (string | null)[] = [];
   balanceFails = 0;
+  /** the protocol flag each order and balance read was given, in call order */
+  v2s: { call: string; v2: boolean }[] = [];
   async conditionIdFor() { return 'CID'; }
   async market() { return this.market_; }
   async orderbook() { return this.book; }
-  async buyFok(_t: string, _c: string, limit: bigint, shares: bigint) { this.buys.push({ limit, shares }); return this.buyResult(shares, limit); }
-  async sellFak(_t: string, _c: string, limit: bigint, shares: bigint) { this.sells.push({ limit, shares }); return this.sellResult(shares, limit); }
+  async buyFok(_t: string, _c: string, limit: bigint, shares: bigint, v2: boolean) { this.v2s.push({ call: 'buy', v2 }); this.buys.push({ limit, shares }); return this.buyResult(shares, limit); }
+  async sellFak(_t: string, _c: string, limit: bigint, shares: bigint, v2: boolean) { this.v2s.push({ call: 'sell', v2 }); this.sells.push({ limit, shares }); return this.sellResult(shares, limit); }
   async fillsOf(orderId: string | null) { this.fillsCalls.push(orderId); return this.lateFill; }
-  async tokenBalance() { if (this.balanceFails > 0) { this.balanceFails--; throw new Error('timeout'); } return this.balance; }
+  async tokenBalance(_t: string, v2: boolean) { this.v2s.push({ call: 'balance', v2 }); if (this.balanceFails > 0) { this.balanceFails--; throw new Error('timeout'); } return this.balance; }
 }
 
 const LIVE = { mode: 'live', polymarket: { privateKey: 'ab'.repeat(32), signatureType: 0 } };
@@ -77,7 +79,7 @@ describe('BUY', () => {
     await h.engine.onFill(fill(), ws);
     expect(h.last()).toMatchObject({ decision: 'dry_run_buy', fillPrice: 0.51 });
     expect(h.last().at, 'the decision log line keeps its timestamp').toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    const p = h.state.position(T1, 'TOK')!;
+    const p = h.state.position(T1, '1001')!;
     expect(p.shares).toBe('19000000'); // $10 / 0.51 = 19.6, but at 0.51 only whole shares land on the cent grid
     expect(p.buyCount).toBe(1);
     expect(h.ex.buys.length).toBe(0);
@@ -88,7 +90,7 @@ describe('BUY', () => {
     h.ex.buyResult = (shares, limit) => ({ orderId: 'o1', status: 'filled', shares, usdc: (shares * limit) / 1_000_000n, feeUsdc: 10_000n, netShares: shares - 20_000n });
     await h.engine.onFill(fill(), ws);
     expect(h.ex.buys).toEqual([{ limit: toMicro('0.51'), shares: 19_000_000n }]);
-    expect(h.state.position(T1, 'TOK')!.shares).toBe(String(19_000_000n - 20_000n));
+    expect(h.state.position(T1, '1001')!.shares).toBe(String(19_000_000n - 20_000n));
     expect(h.last()).toMatchObject({ decision: 'bought', orderId: 'o1' });
     expect(h.state.spentToday(new Date(NOW))).toBe((19_000_000n * 510_000n) / 1_000_000n);
   });
@@ -157,7 +159,7 @@ describe('BUY', () => {
   it('caps DCA at maxBuysPerOutcome and opens at most maxOpenPositionsPerTarget outcomes', async () => {
     const h = setup({ copy: { maxBuysPerOutcome: 2, maxOpenPositionsPerTarget: 1 } });
     for (let i = 0; i < 3; i++) await h.engine.onFill(fill(), ws);
-    await h.engine.onFill(fill({ tokenId: 'OTHER' }), ws);
+    await h.engine.onFill(fill({ tokenId: '1003' }), ws);
     expect(h.decisions().map((d) => d.decision)).toEqual(['dry_run_buy', 'dry_run_buy', 'skipped_max_buys_per_outcome', 'skipped_target_position_cap']);
   });
 
@@ -181,14 +183,14 @@ describe('orders whose result is not known', () => {
   it('unconfirmed BUYs hold their budget and position slot against the caps', async () => {
     const h = setup({ ...LIVE, risk: { maxDailySpendUsdc: 15 } });
     h.ex.buyResult = () => ({ orderId: '', status: 'unknown', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: 'post_error', recheck: true });
-    await h.engine.onFill(fill({ tokenId: 'TOK' }), ws);
-    await h.engine.onFill(fill({ tokenId: 'TOK2' }), ws);
+    await h.engine.onFill(fill({ tokenId: '1001' }), ws);
+    await h.engine.onFill(fill({ tokenId: '1002' }), ws);
     expect(h.kinds().at(-1)).toBe('skipped_daily_spend_cap');
     expect(h.ex.buys.length).toBe(1);
     const g = setup({ ...LIVE, copy: { maxOpenPositions: 1 } });
     g.ex.buyResult = h.ex.buyResult;
-    await g.engine.onFill(fill({ tokenId: 'TOK' }), ws);
-    await g.engine.onFill(fill({ tokenId: 'TOK2' }), ws);
+    await g.engine.onFill(fill({ tokenId: '1001' }), ws);
+    await g.engine.onFill(fill({ tokenId: '1002' }), ws);
     expect(g.kinds().at(-1)).toBe('skipped_position_cap');
   });
 
@@ -204,23 +206,23 @@ describe('orders whose result is not known', () => {
     expect(p!.needsReconcile).toMatch(/0xa .*0xb/);
     // the $9.69 it may have spent still counts: another $10 BUY would break the $15 cap
     h.ex.buyResult = (shares, limit) => ({ orderId: 'o2', status: 'filled', shares, usdc: (shares * limit) / 1_000_000n, feeUsdc: 0n, netShares: shares });
-    await h.engine.onFill(fill({ tokenId: 'TOK2', ts: tsAt(h.clock.t) }), ws);
+    await h.engine.onFill(fill({ tokenId: '1002', ts: tsAt(h.clock.t) }), ws);
     expect(h.last().decision).toBe('skipped_daily_spend_cap');
     // the operator checks polymarket.com: it did fill
     await h.engine.reconcile(p!.key, { shares: 19_000_000n, usdc: 9_690_000n });
     expect(h.state.pendingOrders()).toEqual([]);
-    expect(h.state.position(T1, 'TOK')!.shares).toBe('19000000');
+    expect(h.state.position(T1, '1001')!.shares).toBe('19000000');
     expect(h.last()).toMatchObject({ decision: 'reconciled', filled: 19 });
   });
 
   it('a pending order from a build that did not record its size fails closed: no new BUY until reconciled', async () => {
     const h = setup(LIVE);
     writeFileSync(h.state.file, JSON.stringify({ version: 1, positions: {}, processed: [], handledTx: [], spend: { day: '', usdc: '0' },
-      pendingOrders: [{ key: 'buy|old', side: 'buy', orderId: null, target: T1, tokenId: 'TOK', conditionId: 'CID', sentAt: NOW, attempts: 0, nextAt: NOW }], pendingExits: [], bookedOrderIds: [] }));
+      pendingOrders: [{ key: 'buy|old', side: 'buy', orderId: null, target: T1, tokenId: '1001', conditionId: 'CID', sentAt: NOW, attempts: 0, nextAt: NOW }], pendingExits: [], bookedOrderIds: [] }));
     const again = h.restart();
     const st = new BotState(h.dir, 'live');
     expect(st.pendingOrders()[0]!.needsReconcile).toMatch(/older build/);
-    await again.onFill(fill({ tokenId: 'TOK2' }), ws);
+    await again.onFill(fill({ tokenId: '1002' }), ws);
     expect(h.last().decision).toBe('skipped_reconcile_required');
     h.clock.t += 60 * 60_000;
     await again.tick();
@@ -234,7 +236,7 @@ describe('orders whose result is not known', () => {
     const h = setup(LIVE);
     h.ex.buyResult = () => ({ orderId: 'o9', status: 'none', shares: 0n, usdc: 0n, feeUsdc: 0n, netShares: 0n, reason: "order couldn't be fully filled", recheck: true });
     await h.engine.onFill(fill(), ws);
-    expect(h.state.position(T1, 'TOK')).toBeUndefined();
+    expect(h.state.position(T1, '1001')).toBeUndefined();
     expect(h.state.pendingOrders()).toMatchObject([{ orderId: 'o9', side: 'buy' }]);
     // the process restarts before the re-check is due
     const again = h.restart();
@@ -245,7 +247,7 @@ describe('orders whose result is not known', () => {
     await again.tick();
     expect(h.ex.fillsCalls).toEqual(['o9']);
     const st = new BotState(h.dir, 'live');
-    expect(st.position(T1, 'TOK')!.shares).toBe('12000000');
+    expect(st.position(T1, '1001')!.shares).toBe('12000000');
     expect(st.pendingOrders()).toEqual([]);
     expect(st.isBooked('o9')).toBe(true);
     expect(h.last()).toMatchObject({ decision: 'late_fill' });
@@ -278,8 +280,8 @@ describe('orders whose result is not known', () => {
     const second = h.state.pendingOrders().find((p) => p.target === T2)!;
     await h.engine.reconcile(second.key, { shares: 19_000_000n, usdc: 9_690_000n });
     await h.engine.reconcile(h.state.pendingOrders()[0]!.key, null);
-    expect(h.state.position(T2, 'TOK')!.shares).toBe('19000000');
-    expect(h.state.position(T1, 'TOK')).toBeUndefined();
+    expect(h.state.position(T2, '1001')!.shares).toBe('19000000');
+    expect(h.state.position(T1, '1001')).toBeUndefined();
   });
 
   it('gives up only after repeated empty lookups spanning 5 minutes', async () => {
@@ -300,7 +302,7 @@ describe('SELL', () => {
     h.ex.balance = 10_000_000n; // less than the 19 we think we hold
     await h.engine.onFill(fill({ side: 'SELL' }), ws);
     expect(h.ex.sells).toEqual([{ limit: toMicro('0.49'), shares: 10_000_000n }]);
-    expect(h.state.position(T1, 'TOK')!.shares).toBe('9000000');
+    expect(h.state.position(T1, '1001')!.shares).toBe('9000000');
     expect(h.kinds().slice(-3)).toEqual(['exit_queued', 'sell_submitted', 'sold']);
     expect(h.state.pendingExits().length).toBe(1); // 9 shares still booked: keep trying
   });
@@ -312,7 +314,7 @@ describe('SELL', () => {
     h.ex.balance = 25_000_000n; // books say 19 + 19; someone sold 13 by hand
     await h.engine.onFill(fill({ entityId: T1, side: 'SELL' }), ws);
     expect(h.ex.sells).toEqual([{ limit: toMicro('0.49'), shares: 6_000_000n }]); // 25 − T2's 19
-    expect(h.state.position(T2, 'TOK')!.shares).toBe('19000000');
+    expect(h.state.position(T2, '1001')!.shares).toBe('19000000');
   });
 
   it('refuses to sell and asks for a reconcile when everything left is booked to others', async () => {
@@ -335,7 +337,7 @@ describe('SELL', () => {
     h.ex.lateFill = { shares: 19_000_000n, usdc: 9_690_000n, feeUsdc: 0n, feeShares: 0n, orderIds: ['o9'] };
     h.ex.balance = 0n;                                        // the balance endpoint has not caught up
     h.clock.t += 1_000; await h.engine.tick();                 // books the late BUY, exit sees 0
-    expect(h.state.position(T1, 'TOK')!.shares).toBe('19000000');
+    expect(h.state.position(T1, '1001')!.shares).toBe('19000000');
     expect(h.state.pendingExits().length).toBe(1);
     const again = h.restart();                                 // …and it survives a restart
     h.ex.balance = 19_000_000n;
@@ -504,7 +506,7 @@ describe('SELL', () => {
     await h.engine.onFill(fill(), ws);
     await h.engine.onFill(fill({ entityId: T2, side: 'SELL' }), ws);
     expect(h.last().decision).toBe('skipped_no_position');
-    expect(h.state.position(T1, 'TOK')).toBeDefined();
+    expect(h.state.position(T1, '1001')).toBeDefined();
   });
 
   it('dry-run sells the whole position at the bid', async () => {
@@ -520,6 +522,79 @@ describe('SELL', () => {
     await h.engine.onFill(fill(), ws);
     await h.engine.onFill(fill({ side: 'SELL' }), ws);
     expect(h.last().decision).toBe('skipped_sell_mode_none');
+  });
+});
+
+describe('Polymarket V2 markets', () => {
+  const V2 = '456322662693127080402085893806415780684933579476723864069977356327020658688';
+  const CTF = '69515744437473089728151261939146426925489297565662421305942992110046228478629';
+  const COMBO = '1628948707922995775031622509772078765406110626872621424817699628095377506304';
+  const v2Market = (h: ReturnType<typeof setup>, tokenId: string, version: string | undefined) => {
+    h.ex.market_ = { ...h.ex.market_, version, tokens: [{ tokenId, outcome: 'Up' }] };
+    h.ex.book = { ...h.ex.book, tokenId };
+  };
+
+  it('buys and sells a V2 position as one: order, balance and exit all on the V2 path', async () => {
+    const h = setup(LIVE);
+    v2Market(h, V2, 'v2');
+    await h.engine.onFill(fill({ tokenId: V2 }), ws);
+    expect(h.last()).toMatchObject({ decision: 'bought' });
+    await h.engine.onFill(fill({ tokenId: V2, side: 'SELL' }), ws);
+    expect(h.kinds().slice(-4)).toEqual(['exit_queued', 'sell_submitted', 'sold', 'exit_done']);
+    expect(h.ex.v2s).toEqual([{ call: 'buy', v2: true }, { call: 'balance', v2: true }, { call: 'sell', v2: true }]);
+  });
+
+  it('a CTF market stays on the CTF path', async () => {
+    const h = setup(LIVE);
+    v2Market(h, CTF, 'v1');
+    await h.engine.onFill(fill({ tokenId: CTF }), ws);
+    await h.engine.onFill(fill({ tokenId: CTF, side: 'SELL' }), ws);
+    expect(h.ex.v2s).toEqual([{ call: 'buy', v2: false }, { call: 'balance', v2: false }, { call: 'sell', v2: false }]);
+  });
+
+  it('a combo is skipped before any lookup, either side', async () => {
+    const h = setup(LIVE);
+    await h.engine.onFill(fill({ tokenId: COMBO }), ws);
+    await h.engine.onFill(fill({ tokenId: COMBO, side: 'SELL' }), ws);
+    expect(h.kinds()).toEqual(['skipped_combo', 'skipped_combo']);
+    expect(h.ex.v2s).toEqual([]);
+  });
+
+  it('an id not in canonical decimal form is skipped before any lookup, either side', async () => {
+    const h = setup(LIVE);
+    for (const tokenId of ['0' + V2, '0x010244fc458730a0481ec6b69383fde885000000000000000000000000000000', ` ${CTF}`]) {
+      await h.engine.onFill(fill({ tokenId }), ws);
+      await h.engine.onFill(fill({ tokenId, side: 'SELL' }), ws);
+    }
+    expect(new Set(h.kinds())).toEqual(new Set(['skipped_invalid_token_id']));
+    expect(h.kinds().length).toBe(6);
+    expect(h.ex.v2s).toEqual([]);
+  });
+
+  it('when the market and the id disagree, nothing is bought — in dry-run too', async () => {
+    for (const [tokenId, version] of [[CTF, 'v2'], [V2, 'v1'], [V2, undefined], [V2, 'v9']] as const) {
+      for (const raw of [LIVE, {}]) {
+        const h = setup(raw);
+        v2Market(h, tokenId, version);
+        await h.engine.onFill(fill({ tokenId }), ws);
+        expect(h.last(), `${tokenId.slice(0, 6)} ${version} ${JSON.stringify(raw)}`).toMatchObject({ decision: 'skipped_market_version' });
+        expect(h.ex.buys).toEqual([]);
+        expect(h.state.positions()).toEqual([]);
+      }
+    }
+  });
+
+  it('an exit whose market no longer fits its id is kept and retried, never sold on a guess', async () => {
+    const h = setup(LIVE);
+    v2Market(h, V2, 'v2');
+    await h.engine.onFill(fill({ tokenId: V2 }), ws);
+    h.ex.market_ = { ...h.ex.market_, version: undefined };
+    await h.engine.onFill(fill({ tokenId: V2, side: 'SELL' }), ws);
+    expect(h.last()).toMatchObject({ decision: 'exit_retry_market_version' });
+    expect(h.ex.sells).toEqual([]);
+    h.ex.market_ = { ...h.ex.market_, version: 'v2' };
+    h.clock.t += 1_000; await h.engine.tick();
+    expect(h.ex.sells.length).toBe(1);
   });
 });
 
@@ -544,7 +619,7 @@ describe('settlement sweep', () => {
   it('drops resolved positions and records the result', async () => {
     const h = setup();
     await h.engine.onFill(fill(), ws);
-    h.ex.market_ = { ...h.ex.market_, closed: true, tokens: [{ tokenId: 'TOK', outcome: 'Yes', winner: true }] };
+    h.ex.market_ = { ...h.ex.market_, closed: true, tokens: [{ tokenId: '1001', outcome: 'Yes', winner: true }] };
     await h.engine.sweepSettled();
     expect(h.state.positions()).toEqual([]);
     expect(h.last()).toMatchObject({ decision: 'settled', won: true, payout: '$19.00' });

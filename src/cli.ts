@@ -15,7 +15,7 @@ import { checkFunder } from './wallets.js';
 import { checkGeo, describeGeo } from './geo.js';
 import { BotState, InstanceLock } from './state.js';
 import { CopyEngine } from './engine.js';
-import { PolymarketGateway } from './polymarket.js';
+import { EXCHANGE_V3, PolymarketGateway, exchangeV3Approval } from './polymarket.js';
 import { fmtUsd, fromMicro, toMicro } from './units.js';
 
 const HELP = `pmwallets-copytrade — copy the Polymarket wallets you follow on PMWallets
@@ -174,8 +174,17 @@ async function check(path: string, out: (line: string) => void = console.log): P
         ? 'no exchange contract may spend this wallet\'s USDC yet: approve them before the first trade (see the README)'
         : 'no exchange contract may spend this account\'s USDC: finish setting up trading on polymarket.com (make one trade or deposit there) first');
       problems++;
-    } else if (zero.length) out(`  ! no approval yet for ${zero.join(', ')} — orders routed through it will fail`);
-    else ok('exchange approvals in place');
+    } else {
+      // ExchangeV3 trades the Polymarket V2 markets; it gets its own line
+      const v3 = exchangeV3Approval(allowances);
+      const others = zero.filter((k) => k.toLowerCase() !== EXCHANGE_V3.toLowerCase());
+      if (others.length) out(`  ! no approval yet for ${others.join(', ')} — orders routed through it will fail`);
+      if (v3 !== 'approved') {
+        out(`  ! ${v3 === 'zero' ? 'no' : 'Polymarket reports no'} pUSD approval for ExchangeV3 (${EXCHANGE_V3}), which trades Polymarket V2 markets`
+          + ` (every new market from 2026-11-02): BUYs there will be rejected — ${type === 0 ? 'see the README' : 'accept the approval prompt on polymarket.com'}`);
+      }
+      if (!others.length && v3 === 'approved') ok('exchange approvals in place, ExchangeV3 (Polymarket V2 markets) included');
+    }
     if (usdc > 0n) ok(`balance ${fmtUsd(usdc)} available to trade`);
     else {
       bad('balance $0.00 — if polymarket.com shows money in this account, signatureType or funderAddress is wrong');

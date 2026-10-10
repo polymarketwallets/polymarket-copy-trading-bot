@@ -2,7 +2,7 @@ import type { Fill, FillMeta } from 'pmwallets';
 import type { Config, TargetConfig } from './config.js';
 import { bookGate, marketGate, slippageGate } from './filters.js';
 import type { Logger } from './log.js';
-import type { Book, Market, OrderMatch, OrderOutcome, TradeFill } from './polymarket.js';
+import { idKind, marketProtocol, type Book, type Market, type OrderMatch, type OrderOutcome, type TradeFill } from './polymarket.js';
 import type { BotState, PendingExit, PendingOrder, Position } from './state.js';
 import { UNIT, clampLimit, fmtUsd, fromMicro, parseFillTs, roundBuyShares, toMicro } from './units.js';
 
@@ -12,10 +12,11 @@ export interface Exchange {
   conditionIdFor(tokenId: string): Promise<string>;
   market(conditionId: string, maxAgeMs?: number, withEndDate?: boolean): Promise<Market>;
   orderbook(tokenId: string): Promise<Book>;
-  buyFok(tokenId: string, conditionId: string, limit: bigint, shares: bigint): Promise<OrderOutcome>;
-  sellFak(tokenId: string, conditionId: string, limit: bigint, shares: bigint): Promise<OrderOutcome>;
+  /** `v2`: a Polymarket V2 position (ExchangeV3), else a CTF token — from marketProtocol. Omitted = CTF only. */
+  buyFok(tokenId: string, conditionId: string, limit: bigint, shares: bigint, v2?: boolean): Promise<OrderOutcome>;
+  sellFak(tokenId: string, conditionId: string, limit: bigint, shares: bigint, v2?: boolean): Promise<OrderOutcome>;
   fillsOf(orderId: string | null, conditionId: string, sinceMs: number, match?: OrderMatch): Promise<TradeFill>;
-  tokenBalance(tokenId: string): Promise<bigint>;
+  tokenBalance(tokenId: string, v2?: boolean): Promise<bigint>;
 }
 
 export interface EngineOptions {
@@ -120,6 +121,11 @@ export class CopyEngine {
     const tcfg = targets?.get(target);
     if (targets && !tcfg) return this.decide(base, 'skipped_not_a_target');
     if (!cfg.copy.roles.includes(fill.role)) return this.decide(base, 'skipped_role');
+    // a combo (combinatorial V2 position) is a multi-leg parlay traded by RFQ, never on the order book: not copyable
+    const kind = idKind(fill.tokenId);
+    if (kind === 'combo') return this.decide(base, 'skipped_combo');
+    // an id not in canonical decimal form could be any position once parsed: never look it up or trade it
+    if (kind === 'invalid') return this.decide(base, 'skipped_invalid_token_id');
     // one copy per target transaction: a taker order that walks several makers, or a maker order
     // hit several times in one tx, is still one decision by the trader
     const txKey = `${target}|${fill.txHash}|${fill.tokenId}|${fill.side}`;
@@ -177,6 +183,9 @@ export class CopyEngine {
     if (!mg.ok) return this.decide(base, 'skipped_market', { reason: mg.reason });
     const outcome = market.tokens.find((t) => t.tokenId === fill.tokenId);
     if (!outcome) return this.decide(base, 'skipped_token_not_in_market');
+    // CTF token or V2 position: signed for different exchanges. When the market and the id disagree, do not guess.
+    const proto = marketProtocol(market, fill.tokenId);
+    if (!proto.ok) return this.decide(base, 'skipped_market_version', { reason: proto.reason });
     try { book = await exchange.orderbook(fill.tokenId); } catch (e) { return this.decide(base, 'skipped_book_failed', { reason: (e as Error).message.slice(0, 200) }); }
     const bg = bookGate(book, 'buy', cfg.copy);
     if (!bg.ok) return this.decide(base, 'skipped_book', { reason: bg.reason });
@@ -202,7 +211,7 @@ export class CopyEngine {
     const reserve = (shares * limit) / UNIT;
     this.commitOrder(fill.eventId, { key, side: 'buy', orderId: null, ...pos, shares: shares.toString(), limit: limit.toString(), reserveUsdc: reserve.toString(), sentAt: this.now(), attempts: 0, nextAt: this.now() + this.recheckDelay(0) },
       { ...base, decision: 'buy_submitted', limit: fromMicro(limit), shares: fromMicro(shares) });
-    const r = await exchange.buyFok(fill.tokenId, conditionId, limit, shares);
+    const r = await exchange.buyFok(fill.tokenId, conditionId, limit, shares, proto.v2);
     this.afterOrder(key, r, base, { market: market.question, outcome: outcome.outcome });
   }
 
@@ -324,6 +333,8 @@ export class CopyEngine {
     if (market.closed) return done('exit_dropped_market_closed');
     const mg = marketGate(market, 'sell', cfg.copy, this.now());
     if (!mg.ok) return retry('exit_retry_market_paused', { reason: mg.reason });
+    const proto = marketProtocol(market, tokenId);
+    if (!proto.ok) return retry('exit_retry_market_version', { reason: proto.reason });
     const bg = bookGate(book, 'sell', cfg.copy);
     if (!bg.ok) return retry('exit_retry_no_bids');
     const bid = book.bids[0]!.price;
@@ -336,7 +347,7 @@ export class CopyEngine {
     }
 
     let balance: bigint;
-    try { balance = await exchange.tokenBalance(tokenId); } catch (e) { return retry('exit_retry_balance_failed', { reason: (e as Error).message.slice(0, 200) }); }
+    try { balance = await exchange.tokenBalance(tokenId, proto.v2); } catch (e) { return retry('exit_retry_balance_failed', { reason: (e as Error).message.slice(0, 200) }); }
     const others = state.sharesHeldByOthers(target, tokenId);
     const available = balance - others;
     if (available < shares) shares = available > 0n ? available : 0n;
@@ -362,7 +373,7 @@ export class CopyEngine {
     const key = `sell|${exit.eventId}|${exit.attempts}`;
     this.commitOrder(null, { key, side: 'sell', orderId: null, target, tokenId, conditionId: held.conditionId, question: held.question, outcome: held.outcome, shares: shares.toString(), limit: clampLimit(bid, book.tickSize).toString(), reserveUsdc: '0', sentAt: this.now(), attempts: 0, nextAt: this.now() + this.recheckDelay(0) },
       { ...base, decision: 'sell_submitted', limit: fromMicro(bid), shares: fromMicro(shares) });
-    const r = await exchange.sellFak(tokenId, held.conditionId, bid, shares);
+    const r = await exchange.sellFak(tokenId, held.conditionId, bid, shares, proto.v2);
     const costOfSold = (BigInt(held.costUsdc) * r.shares) / BigInt(held.shares);
     this.afterOrder(key, r, base, r.status === 'filled' ? { pnl: fmtUsd(r.usdc - r.feeUsdc - costOfSold) } : {});
     // done only when nothing is left AND no BUY on this outcome can still turn into shares (a DCA add
