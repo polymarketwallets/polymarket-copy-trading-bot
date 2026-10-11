@@ -1,6 +1,6 @@
 # Polymarket copy-trading bot (Node.js / TypeScript)
 
-[![npm](https://img.shields.io/npm/v/pmwallets-copytrade.svg)](https://www.npmjs.com/package/pmwallets-copytrade) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/pmwallets-copytrade.svg)](https://www.npmjs.com/package/pmwallets-copytrade) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/Xy5uTTb3gN)
 
 A **ready-to-run Polymarket copy-trading bot** built on [PMWallets](https://pmwallets.com/copy-trading): it follows the
 traders you subscribe to and mirrors their fills on the Polymarket CLOB with your own account, inside the limits you set.

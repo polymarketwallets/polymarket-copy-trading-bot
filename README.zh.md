@@ -1,6 +1,6 @@
 # Polymarket 跟单机器人（Node.js / TypeScript）
 
-[![npm](https://img.shields.io/npm/v/pmwallets-copytrade.svg)](https://www.npmjs.com/package/pmwallets-copytrade) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/pmwallets-copytrade.svg)](https://www.npmjs.com/package/pmwallets-copytrade) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/Xy5uTTb3gN)
 
 基于 [PMWallets](https://pmwallets.com/zh/copy-trading) 的**开箱即用 Polymarket 跟单机器人**：跟随你订阅的交易者，
 用你自己的账户在 Polymarket CLOB 上按你设定的限制跟单。
