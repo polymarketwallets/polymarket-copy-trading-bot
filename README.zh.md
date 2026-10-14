@@ -99,6 +99,29 @@ support@pmwallets.com。文件里有机器人版本、`check` 结果、去掉密
 要把流有意地换给新机器人，就在新的那个上设置 `pmwallets.takeover: true` —— 旧的会收到「被接管」并停止。机器人自己网络
 闪断后的重连不需要这个设置。PMWallets 重启推送服务时，机器人会立刻重连，并补发断线期间漏掉的成交。
 
+## 给 AI agent 和脚本用
+
+除了 `run`，机器人还有一组输出 JSON 的单次命令，让 AI agent（或脚本）自己判断、自己下单——比如处理
+`pmwallets watch --exec` 交给它的成交。它们用同一份配置，由 `mode` 决定：`dry-run` 按实时盘口模拟、什么都不发，
+`live` 真实下单。
+
+```bash
+pmwallets-copytrade market <tokenId>       # 市场问题、各 outcome、价格、盘口
+pmwallets-copytrade balance                # 可用 USDC、授权
+pmwallets-copytrade positions              # 持仓、市值、盈亏
+pmwallets-copytrade trades --limit 20
+pmwallets-copytrade order buy <tokenId> --usdc 5 --max-price 0.45 --key <eventId>
+pmwallets-copytrade order sell <tokenId> --all --min-price 0.40 --key <eventId>:exit
+pmwallets-copytrade mcp --config /绝对路径/config.yaml     # 同样的能力，作为 MCP 工具
+```
+
+- BUY 是全部成交否则取消（FOK）；`--usdc` 是上限（按限价算股数，花费不会超过它）。SELL 能成交多少成交多少，其余
+  取消（FAK），不超过账户持有量。
+- `--key` 让重试安全：下单前先把 key 写进 `dataDir`，同一个 key 永远不会下第二单。用成交的 `eventId` 即可。
+- `status: unknown`（或 `verify: true`）表示可能已成交——再下单前先查 `trades`。退出码 0 = 已成交或 dry_run，
+  2 = 没成交，3 = 不确定。
+- 这些订单是你自己的交易，不计入机器人的账（持仓、每日上限）。不要用它卖掉正在运行的机器人替某个目标持有的仓位。
+
 ## 配置
 
 `pmwallets-copytrade init` 会生成带注释的 `config.yaml`。文件里的 `${NAME}` 会被替换成环境变量 `NAME` 的值；

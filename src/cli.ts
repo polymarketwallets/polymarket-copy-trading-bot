@@ -9,7 +9,7 @@ import { consoleLogger, teeLogger } from './log.js';
 import { RotatingFile } from './files.js';
 import { VERSION } from './version.js';
 import { diagnose } from './diagnose.js';
-import { addConfigSecrets, addRawConfigSecrets, redactText } from './secrets.js';
+import { addConfigSecrets, addRawConfigSecrets, redact, redactText } from './secrets.js';
 import { funderMismatch, run } from './run.js';
 import { checkFunder } from './wallets.js';
 import { checkGeo, describeGeo } from './geo.js';
@@ -17,6 +17,8 @@ import { BotState, InstanceLock } from './state.js';
 import { CopyEngine } from './engine.js';
 import { EXCHANGE_V3, PolymarketGateway, exchangeV3Approval } from './polymarket.js';
 import { fmtUsd, fromMicro, toMicro } from './units.js';
+import { balanceOf, flagValue, rejectUnknownFlags, marketInfo, order, serveAgentMcp, accountAddress } from './agent-cli.js';
+import { positions, trades } from './agent.js';
 
 const HELP = `pmwallets-copytrade — copy the Polymarket wallets you follow on PMWallets
 
@@ -30,8 +32,22 @@ const HELP = `pmwallets-copytrade — copy the Polymarket wallets you follow on 
       write pmw-diagnose-<time>.json.gz for support@pmwallets.com: logs, decisions, state and \`check\`, no keys
   pmwallets-copytrade --version
 
+For AI agents and scripts (JSON out; the config's mode decides: dry-run simulates, live trades):
+  pmwallets-copytrade market <tokenId>                       market, outcomes and order book of a token
+  pmwallets-copytrade balance | positions | trades [--limit 50]   the Polymarket account
+  pmwallets-copytrade order buy <tokenId> (--usdc <max> | --shares <n>) [--max-price <p>] [--key <id>]
+  pmwallets-copytrade order sell <tokenId> (--shares <n> | --all) [--min-price <p>] [--key <id>]
+      --key: an idempotency key (e.g. the fill's eventId) — the same key never sends a second order
+  pmwallets-copytrade mcp [--config config.yaml]             the same as MCP tools, for agent apps
+
 Starts in dry-run: nothing is traded until you set \`mode: live\`.
 Docs: https://pmwallets.com/copy-trading`;
+
+function positional(i: number, name: string): string {
+  const v = process.argv[i];
+  if (!v || v.startsWith('--')) throw new Error(`${name} is required`);
+  return v;
+}
 
 function arg(name: string, fallback: string): string {
   const i = process.argv.indexOf(name);
@@ -122,6 +138,34 @@ async function main() {
       await engine.reconcile(key, result);
       console.log('reconciled');
     } finally { lock.release(); }
+    return;
+  }
+  if (cmd === 'mcp') {
+    applyProxyFromEnv();
+    await serveAgentMcp(flagValue(process.argv, '--config') ?? 'config.yaml');
+    return;
+  }
+  if (cmd === 'market' || cmd === 'balance' || cmd === 'positions' || cmd === 'trades' || cmd === 'order') {
+    applyProxyFromEnv();
+    // strict: a --config with no value must not fall back to config.yaml — that may be another account, or live
+    const cfg = loadConfig(flagValue(process.argv, '--config') ?? 'config.yaml');
+    // redact the value, then serialize: escaping could hide a secret from a match on the serialized text
+    const out = (v: unknown) => console.log(JSON.stringify(redact(v), null, 2));
+    if (cmd === 'market') return out(await marketInfo(cfg, positional(3, 'tokenId')));
+    if (cmd === 'balance') return out(await balanceOf(cfg));
+    if (cmd === 'positions') return out(await positions(accountAddress(cfg)));
+    if (cmd === 'trades') return out(await trades(accountAddress(cfg), Number(arg('--limit', '50'))));
+    if (cmd === 'order') rejectUnknownFlags(process.argv.slice(3), ['--usdc', '--shares', '--all', '--max-price', '--min-price', '--key', '--config']);
+    const side = process.argv[3];
+    if (side !== 'buy' && side !== 'sell') throw new Error('order buy|sell <tokenId> …');
+    const n = (name: string) => { const v = flagValue(process.argv, name); return v === undefined ? undefined : Number(v); };
+    const result = await order(cfg, {
+      side, tokenId: positional(4, 'tokenId'), usdc: n('--usdc'), shares: n('--shares'), all: process.argv.includes('--all') || undefined,
+      maxPrice: n('--max-price'), minPrice: n('--min-price'), key: flagValue(process.argv, '--key'),
+    });
+    out(result);
+    // a script must be able to tell "it traded" from "it did not" without parsing: 0 filled / dry_run, 2 otherwise, 3 maybe
+    process.exitCode = result['status'] === 'filled' || result['status'] === 'dry_run' ? 0 : result['status'] === 'unknown' || result['verify'] ? 3 : 2;
     return;
   }
   console.log(HELP);

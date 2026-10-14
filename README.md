@@ -108,6 +108,31 @@ To move the stream to a new bot on purpose, set `pmwallets.takeover: true` on th
 replaced and stops. A bot's own reconnects after a network drop never need this. When PMWallets restarts its stream
 service the bot reconnects at once and replays anything it missed.
 
+## For AI agents and scripts
+
+Besides `run`, the bot has one-off commands that print JSON, so an AI agent (or a script) can decide and trade by
+itself — for example on the fills `pmwallets watch --exec` hands it. They use the same config; its `mode` decides:
+`dry-run` simulates each order against the live order book and sends nothing, `live` trades.
+
+```bash
+pmwallets-copytrade market <tokenId>       # question, outcomes, prices, order book
+pmwallets-copytrade balance                # USDC to trade, approvals
+pmwallets-copytrade positions              # open positions, value, PnL
+pmwallets-copytrade trades --limit 20
+pmwallets-copytrade order buy <tokenId> --usdc 5 --max-price 0.45 --key <eventId>
+pmwallets-copytrade order sell <tokenId> --all --min-price 0.40 --key <eventId>:exit
+pmwallets-copytrade mcp --config /abs/path/config.yaml     # the same as MCP tools
+```
+
+- BUY is fill-or-kill; `--usdc` is a ceiling (sized at the limit, so the order cannot cost more). SELL is
+  fill-and-kill, capped at what the account holds.
+- `--key` makes retries safe: the key is written to `dataDir` before the order is sent, and the same key never sends
+  a second order. Use the fill's `eventId`.
+- `status: unknown` (or `verify: true`) means the order may have filled — check `trades` before sending another.
+  Exit code 0 = filled or dry_run, 2 = not traded, 3 = unknown.
+- These orders are your own trades: the bot's books (positions, daily cap) do not count them. Don't sell with them
+  what a running bot is holding for a target.
+
 ## Configuration
 
 `pmwallets-copytrade init` writes a commented `config.yaml`. `${NAME}` in the file is replaced by the environment
