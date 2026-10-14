@@ -14,10 +14,13 @@ import { VERSION } from './version.js';
 import { checkFunder } from './wallets.js';
 
 /** gateway logs go to stderr: stdout carries the answer (or, for `mcp`, the protocol) */
-const stderrLog = {
-  info: (m: string, f?: Record<string, unknown>) => process.stderr.write(`${redactText(`${m}${f ? ` ${JSON.stringify(f)}` : ''}`)}\n`),
-  warn: (m: string, f?: Record<string, unknown>) => process.stderr.write(`${redactText(`WARN ${m}${f ? ` ${JSON.stringify(f)}` : ''}`)}\n`),
-  error: (m: string, f?: Record<string, unknown>) => process.stderr.write(`${redactText(`ERROR ${m}${f ? ` ${JSON.stringify(f)}` : ''}`)}\n`),
+// fields are redacted BEFORE they are serialized: JSON escaping (a quote or backslash in a secret) would hide them
+const line = (prefix: string, m: string, f?: Record<string, unknown>) =>
+  process.stderr.write(`${redactText(`${prefix}${m}`)}${f ? ` ${JSON.stringify(redact(f))}` : ''}\n`);
+export const stderrLog = {
+  info: (m: string, f?: Record<string, unknown>) => line('', m, f),
+  warn: (m: string, f?: Record<string, unknown>) => line('WARN ', m, f),
+  error: (m: string, f?: Record<string, unknown>) => line('ERROR ', m, f),
 };
 
 /**

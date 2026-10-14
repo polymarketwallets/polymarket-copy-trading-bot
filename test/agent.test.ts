@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildConfig, type Config } from '../src/config.js';
 import { OrderKeys, microToward, mkdirDurable, onTick, describeMarket, placeOrder, positions, trades, validateOrder, walkBook, type AgentExchange, type OrderRequest } from '../src/agent.js';
-import { agentTools, flagValue, rejectUnknownFlags } from '../src/agent-cli.js';
+import { agentTools, flagValue, rejectUnknownFlags, stderrLog } from '../src/agent-cli.js';
 import type { Book, Market, OrderOutcome } from '../src/polymarket.js';
 import { addSecret } from '../src/secrets.js';
 import { toMicro } from '../src/units.js';
@@ -344,6 +344,17 @@ describe('read commands', () => {
     await expect(sellTool.handler({ tokenId: TOKEN, all: 'true' })).rejects.toThrow(/all must be a boolean/);
     await expect(sellTool.handler({ all: true })).rejects.toThrow(/tokenId is required/);
     await expect(tools.find((t) => t.name === 'balance')!.handler({ verbose: true })).rejects.toThrow(/unknown argument/);
+  });
+
+  it('gateway log lines on stderr never carry a credential, even one JSON escaping would change', () => {
+    const nasty = 'pa"ss\\word-logged-0123';
+    addSecret(nasty);
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((c: string | Uint8Array) => { written.push(String(c)); return true; });
+    try { stderrLog.warn(`order response carried ${nasty}`, { err: `echo ${nasty}` }); } finally { spy.mockRestore(); }
+    expect(written.join('')).not.toContain('ss\\\\word');
+    expect(written.join('')).not.toContain(nasty);
+    expect(written.join('')).toContain('<redacted>');
   });
 
   it('MCP tool results and errors never carry a known credential', async () => {
