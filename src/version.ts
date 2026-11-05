@@ -1,2 +1,2 @@
 /** this package's version; test/version.test.ts keeps it equal to package.json */
-export const VERSION = '0.4.2';
+export const VERSION = '0.8.0';

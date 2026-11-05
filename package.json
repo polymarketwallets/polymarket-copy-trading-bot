@@ -1,6 +1,6 @@
 {
   "name": "pmwallets-copytrade",
-  "version": "0.4.2",
+  "version": "0.8.0",
   "description": "Ready-to-run Polymarket copy-trading bot: follows the wallets you subscribe to on PMWallets and mirrors their trades on the Polymarket CLOB, with dry-run, risk caps and exactly-once fill handling — plus order / positions / balance commands and an MCP server so AI agents can trade.",
   "mcpName": "io.github.polymarketwallets/pmwallets-copytrade",
   "type": "module",
@@ -40,7 +40,7 @@
   "dependencies": {
     "@polymarket/clob-client-v2": "^1.2.0",
     "https-proxy-agent": "^7.0.6",
-    "pmwallets": "^0.7.0",
+    "pmwallets": "^0.8.0",
     "undici": "^7.29.1",
     "viem": "^2.46.3",
     "yaml": "^2.5.0"
