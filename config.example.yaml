@@ -59,4 +59,20 @@ copy:
 risk:
   maxDailySpendUsdc: 200     # total USDC of copied BUYs per UTC day, unconfirmed orders included; 0 = no limit
 
+# Buy on PMWallets smart-money signals (Pro and Max plans): several tracked wallets buying the same side in a short
+# time. OFF by default. Real orders in live mode. risk.maxDailySpendUsdc, copy.maxOpenPositions, copy.minPrice/maxPrice,
+# copy.minBookDepthUsdc and the settlement limits all still apply. Try it in dry-run first.
+signals:
+  enabled: false
+  source: official           # official = the PMWallets list; mine = what your own rule on pmwallets.com fired
+  pollSec: 5                 # how often signals are read
+  orderSizeUsdc: 10          # USDC spent on each signal
+  minWallets: 3              # skip signals backed by fewer wallets
+  minTotalUsdc: 5000         # skip signals whose wallets bought less than this in total
+  maxAgeSec: 120             # don't buy a signal older than this (at least 60: its time is rounded to the minute)
+  maxSlippage: 0.05          # skip if the best ask is more than this above the wallets' average entry
+  maxOpenPositions: 5        # outcomes held from signals at once
+  categories: []             # e.g. [sports, politics]; empty = every category
+  exitOnFading: false        # true = sell when the wallets have sold half of what they bought (seen for 6 hours after the signal); false = hold to settlement
+
 dataDir: ./pmw-data          # state, stream cursor, lock file and the decisions log

@@ -35,6 +35,17 @@ export interface EngineOptions {
 
 type Base = Record<string, unknown> & { eventId: string; target: string };
 
+/** what the bot reads of a signal (GET /v1/signals) */
+export interface SignalEntry { id: string; tokenId?: string; state: string; firedAt: string; wallets: number; usd: number; avgPrice: number; category: string | null }
+/**
+ * A position opened from a signal is booked under that signal: its fading is the only one that may sell it, and the
+ * signals together have one budget, apart from the traders followed.
+ */
+export const SIGNAL_PREFIX = 'signal:';
+export const signalTarget = (id: string): string => `${SIGNAL_PREFIX}${id}`;
+/** the API rounds avgPrice to two decimals: the true entry may be this much lower, and slippage is measured from there */
+const AVG_PRICE_ROUNDING = 0.005;
+
 /** an unconfirmed order that stays unmatched after this many lookups (and 5 minutes) had no fill */
 const RECHECK_ATTEMPTS = 5;
 const RECHECK_MIN_AGE_MS = 5 * 60_000;
@@ -82,6 +93,56 @@ export class CopyEngine {
         this.o.state.save();
       }
     });
+
+  /** One signal, at most once. Never throws: the poller must go on to the next. */
+  onSignal = (s: SignalEntry): Promise<void> =>
+    this.serial(async () => {
+      try {
+        await this.handleSignal(s);
+      } catch (e) {
+        const eventId = `signal:${s.id}`;
+        this.o.log.error('signal handling failed', { eventId, error: (e as Error).message });
+        this.o.state.markProcessed(eventId);
+        this.o.state.logDecision({ eventId, decision: 'error', reason: (e as Error).message });
+        this.o.state.save();
+      }
+    });
+
+  /** the signals behind open positions and unconfirmed BUYs: their fading still has to be seen */
+  heldSignals(): string[] {
+    return [...new Set(this.o.state.openOutcomes().map((p) => p.target).filter((t) => t.startsWith(SIGNAL_PREFIX)).map((t) => t.slice(SIGNAL_PREFIX.length)))];
+  }
+
+  private async handleSignal(s: SignalEntry): Promise<void> {
+    const { cfg, state } = this.o;
+    const sc = cfg.signals;
+    const tokenId = String(s.tokenId ?? '');
+    const target = signalTarget(s.id);
+    // a BUY still being confirmed may turn into a position: queue the exit anyway, it waits for the BUY
+    if (sc.exitOnFading && s.state === 'fading' && (state.position(target, tokenId) || this.pendingBuy(target, tokenId))) {
+      const exitId = `signal-exit:${s.id}`;
+      if (state.isProcessed(exitId)) return;
+      state.addPendingExit({ eventId: exitId, target, tokenId, firstAt: this.now(), attempts: 0, nextAt: this.now() });
+      this.decide({ eventId: exitId, target, side: 'SELL', tokenId }, 'exit_queued');
+      return this.attemptExit(state.pendingExits().find((e) => e.target === target && e.tokenId === tokenId)!);
+    }
+    const eventId = `signal:${s.id}`;
+    if (state.isProcessed(eventId)) return;
+    const base: Base = { eventId, target, side: 'BUY', role: 'signal', tokenId, price: s.avgPrice, usdc: s.usd, wallets: s.wallets, source: 'signal' };
+    const kind = idKind(tokenId);
+    if (kind === 'combo') return this.decide(base, 'skipped_combo');
+    if (kind === 'invalid') return this.decide(base, 'skipped_invalid_token_id');
+    if (s.state === 'fading') return this.decide(base, 'skipped_signal_fading');
+    if (s.wallets < sc.minWallets) return this.decide(base, 'skipped_signal_wallets');
+    if (s.usd < sc.minTotalUsdc) return this.decide(base, 'skipped_signal_total');
+    if (sc.categories.length && !sc.categories.includes(s.category ?? '')) return this.decide(base, 'skipped_signal_category');
+    const age = this.now() - Date.parse(s.firedAt);
+    if (!(age <= sc.maxAgeSec * 1000)) return this.decide(base, 'skipped_stale', { ageSec: Math.round(age / 1000) });
+    // one BUY per outcome across all signals: each signal is its own target, so the per-target count cannot see this
+    if (state.openOutcomes().some((p) => p.target.startsWith(SIGNAL_PREFIX) && p.tokenId === tokenId)) return this.decide(base, 'skipped_max_buys_per_outcome');
+    const fill = { eventId, tokenId, price: Math.max(0, s.avgPrice - AVG_PRICE_ROUNDING).toFixed(6) } as Fill;
+    return this.buy(fill, base, target, { entity: target, orderSizeUsdc: sc.orderSizeUsdc, maxBuysPerOutcome: 1 }, { maxSlippage: sc.maxSlippage, maxOpenPerTarget: sc.maxOpenPositions });
+  }
 
   private decide(base: Base, decision: string, extra: Record<string, unknown> = {}): void {
     const { state, log } = this.o;
@@ -149,9 +210,10 @@ export class CopyEngine {
     await this.attemptExit(state.pendingExits().find((e) => e.target === target && e.tokenId === fill.tokenId)!);
   }
 
-  private async buy(fill: Fill, base: Base, target: string, tcfg?: TargetConfig): Promise<void> {
+  /** `signal`: this BUY comes from a signal, which has its own slippage and position limits and no target trade size */
+  private async buy(fill: Fill, base: Base, target: string, tcfg?: TargetConfig, signal?: { maxSlippage: number; maxOpenPerTarget: number }): Promise<void> {
     const { cfg, state, exchange } = this.o;
-    if (fromMicro(BigInt(fill.usdc)) < cfg.copy.minTargetNotionalUsdc) return this.decide(base, 'skipped_small_target_trade');
+    if (!signal && fromMicro(BigInt(fill.usdc)) < cfg.copy.minTargetNotionalUsdc) return this.decide(base, 'skipped_small_target_trade');
 
     const held = state.position(target, fill.tokenId);
     const maxBuys = tcfg?.maxBuysPerOutcome ?? cfg.copy.maxBuysPerOutcome;
@@ -165,7 +227,8 @@ export class CopyEngine {
     // still fit inside the limits the user set
     if (!held) {
       const open = state.openOutcomes();
-      if (open.filter((p) => p.target === target).length >= cfg.copy.maxOpenPositionsPerTarget) return this.decide(base, 'skipped_target_position_cap');
+      const mine = signal ? open.filter((p) => p.target.startsWith(SIGNAL_PREFIX)) : open.filter((p) => p.target === target);
+      if (mine.length >= (signal?.maxOpenPerTarget ?? cfg.copy.maxOpenPositionsPerTarget)) return this.decide(base, 'skipped_target_position_cap');
       if (open.length >= cfg.copy.maxOpenPositions) return this.decide(base, 'skipped_position_cap');
     }
     const budget = toMicro(tcfg?.orderSizeUsdc ?? cfg.copy.orderSizeUsdc);
@@ -190,7 +253,7 @@ export class CopyEngine {
     const bg = bookGate(book, 'buy', cfg.copy);
     if (!bg.ok) return this.decide(base, 'skipped_book', { reason: bg.reason });
     const ask = book.asks[0]!.price;
-    const sg = slippageGate(ask, toMicro(fill.price), cfg.copy);
+    const sg = slippageGate(ask, toMicro(fill.price), signal ? { ...cfg.copy, maxSlippage: signal.maxSlippage } : cfg.copy);
     if (!sg.ok) return this.decide(base, 'skipped_slippage', { reason: sg.reason });
 
     const limit = clampLimit(ask, book.tickSize);

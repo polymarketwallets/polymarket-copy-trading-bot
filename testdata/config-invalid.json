@@ -1,117 +1,145 @@
 {
- "_doc": "Configs both implementations must REFUSE at start-up. A field that is present but empty is never replaced by its default: that would trade with amounts or limits nobody confirmed.",
- "cases": [
-  {
-   "name": "empty copy.orderSizeUsdc",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  orderSizeUsdc:\n"
-  },
-  {
-   "name": "empty risk.maxDailySpendUsdc",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\nrisk:\n  maxDailySpendUsdc:\n"
-  },
-  {
-   "name": "empty copy.sellMode",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  sellMode:\n"
-  },
-  {
-   "name": "empty copy.minPrice",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  minPrice:\n"
-  },
-  {
-   "name": "empty copy.maxFillAgeSec",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  maxFillAgeSec:\n"
-  },
-  {
-   "name": "empty copy.roles",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  roles:\n"
-  },
-  {
-   "name": "empty mode",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\nmode:\n"
-  },
-  {
-   "name": "empty targets",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ntargets:\n"
-  },
-  {
-   "name": "empty target orderSizeUsdc",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ntargets:\n  - entity: \"0x1111111111111111111111111111111111111111\"\n    orderSizeUsdc:\n"
-  },
-  {
-   "name": "empty dataDir",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ndataDir:\n"
-  },
-  {
-   "name": "empty pmwallets.apiKey",
-   "yaml": "pmwallets:\n  apiKey:\n"
-  },
-  {
-   "name": "live with empty signatureType",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\nmode: live\npolymarket:\n  privateKey: 0xabababababababababababababababababababababababababababababababab\n  signatureType:\n  funderAddress: 0x1111111111111111111111111111111111111111\n"
-  },
-  {
-   "name": "numeric text",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  orderSizeUsdc: ten\n"
-  },
-  {
-   "name": "typo: target instead of targets",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ntarget:\n  - \"0x1111111111111111111111111111111111111111\"\n"
-  },
-  {
-   "name": "typo: risk.maxDailySpendUSDc",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\nrisk:\n  maxDailySpendUSDc: 1\n"
-  },
-  {
-   "name": "typo: copy.orderSizeUSDc",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  orderSizeUSDc: 1\n"
-  },
-  {
-   "name": "typo: copy.sellmode",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  sellmode: none\n"
-  },
-  {
-   "name": "typo: polymarket.funder",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\npolymarket:\n  funder: \"0x1111111111111111111111111111111111111111\"\n"
-  },
-  {
-   "name": "typo: targets[].orderSize",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ntargets:\n  - entity: \"0x1111111111111111111111111111111111111111\"\n    orderSize: 5\n"
-  },
-  {
-   "name": "section given a value: risk: 10",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\nrisk: 10\n"
-  },
-  {
-   "name": "section given a value: copy: foo",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy: foo\n"
-  },
-  {
-   "name": "section given a list: polymarket",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\npolymarket:\n  - a\n"
-  },
-  {
-   "name": "duplicate key: copy.orderSizeUsdc",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  orderSizeUsdc: 10\n  orderSizeUsdc: 100000\n"
-  },
-  {
-   "name": "duplicate key: risk.maxDailySpendUsdc",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\nrisk:\n  maxDailySpendUsdc: 50\n  maxDailySpendUsdc: 5000\n"
-  },
-  {
-   "name": "duplicate key: top-level mode",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\nmode: dry-run\nmode: live\n"
-  },
-  {
-   "name": "duplicate key inside a target",
-   "yaml": "pmwallets: {apiKey: pmw_a_b}\ntargets:\n  - entity: \"0x1111111111111111111111111111111111111111\"\n    orderSizeUsdc: 5\n    orderSizeUsdc: 500\n"
-  },
-  {
-   "name": "empty pmwallets.takeover",
-   "yaml": "pmwallets:\n  apiKey: pmw_a_b\n  takeover:\n"
-  },
-  {
-   "name": "pmwallets.takeover is not a boolean",
-   "yaml": "pmwallets:\n  apiKey: pmw_a_b\n  takeover: maybe\n"
-  }
- ]
+  "_doc": "Configs both implementations must REFUSE at start-up. A field that is present but empty is never replaced by its default: that would trade with amounts or limits nobody confirmed.",
+  "cases": [
+    {
+      "name": "empty copy.orderSizeUsdc",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  orderSizeUsdc:\n"
+    },
+    {
+      "name": "empty risk.maxDailySpendUsdc",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nrisk:\n  maxDailySpendUsdc:\n"
+    },
+    {
+      "name": "empty copy.sellMode",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  sellMode:\n"
+    },
+    {
+      "name": "empty copy.minPrice",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  minPrice:\n"
+    },
+    {
+      "name": "empty copy.maxFillAgeSec",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  maxFillAgeSec:\n"
+    },
+    {
+      "name": "empty copy.roles",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  roles:\n"
+    },
+    {
+      "name": "empty mode",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nmode:\n"
+    },
+    {
+      "name": "empty targets",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ntargets:\n"
+    },
+    {
+      "name": "empty target orderSizeUsdc",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ntargets:\n  - entity: \"0x1111111111111111111111111111111111111111\"\n    orderSizeUsdc:\n"
+    },
+    {
+      "name": "empty dataDir",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ndataDir:\n"
+    },
+    {
+      "name": "empty pmwallets.apiKey",
+      "yaml": "pmwallets:\n  apiKey:\n"
+    },
+    {
+      "name": "live with empty signatureType",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nmode: live\npolymarket:\n  privateKey: 0xabababababababababababababababababababababababababababababababab\n  signatureType:\n  funderAddress: 0x1111111111111111111111111111111111111111\n"
+    },
+    {
+      "name": "numeric text",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  orderSizeUsdc: ten\n"
+    },
+    {
+      "name": "typo: target instead of targets",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ntarget:\n  - \"0x1111111111111111111111111111111111111111\"\n"
+    },
+    {
+      "name": "typo: risk.maxDailySpendUSDc",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nrisk:\n  maxDailySpendUSDc: 1\n"
+    },
+    {
+      "name": "typo: copy.orderSizeUSDc",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  orderSizeUSDc: 1\n"
+    },
+    {
+      "name": "typo: copy.sellmode",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  sellmode: none\n"
+    },
+    {
+      "name": "typo: polymarket.funder",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\npolymarket:\n  funder: \"0x1111111111111111111111111111111111111111\"\n"
+    },
+    {
+      "name": "typo: targets[].orderSize",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ntargets:\n  - entity: \"0x1111111111111111111111111111111111111111\"\n    orderSize: 5\n"
+    },
+    {
+      "name": "section given a value: risk: 10",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nrisk: 10\n"
+    },
+    {
+      "name": "section given a value: copy: foo",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy: foo\n"
+    },
+    {
+      "name": "section given a list: polymarket",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\npolymarket:\n  - a\n"
+    },
+    {
+      "name": "duplicate key: copy.orderSizeUsdc",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ncopy:\n  orderSizeUsdc: 10\n  orderSizeUsdc: 100000\n"
+    },
+    {
+      "name": "duplicate key: risk.maxDailySpendUsdc",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nrisk:\n  maxDailySpendUsdc: 50\n  maxDailySpendUsdc: 5000\n"
+    },
+    {
+      "name": "duplicate key: top-level mode",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nmode: dry-run\nmode: live\n"
+    },
+    {
+      "name": "duplicate key inside a target",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\ntargets:\n  - entity: \"0x1111111111111111111111111111111111111111\"\n    orderSizeUsdc: 5\n    orderSizeUsdc: 500\n"
+    },
+    {
+      "name": "empty pmwallets.takeover",
+      "yaml": "pmwallets:\n  apiKey: pmw_a_b\n  takeover:\n"
+    },
+    {
+      "name": "pmwallets.takeover is not a boolean",
+      "yaml": "pmwallets:\n  apiKey: pmw_a_b\n  takeover: maybe\n"
+    },
+    {
+      "name": "empty signals.orderSizeUsdc",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nsignals:\n  orderSizeUsdc:\n"
+    },
+    {
+      "name": "signals.enabled not a boolean",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nsignals:\n  enabled: maybe\n"
+    },
+    {
+      "name": "signals.source unknown",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nsignals:\n  source: everyone\n"
+    },
+    {
+      "name": "signals.minWallets of one",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nsignals:\n  minWallets: 1\n"
+    },
+    {
+      "name": "signals.maxAgeSec below the minute a signal time is rounded to",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nsignals:\n  maxAgeSec: 30\n"
+    },
+    {
+      "name": "signals.pollSec too fast",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nsignals:\n  pollSec: 1\n"
+    },
+    {
+      "name": "unknown key in signals",
+      "yaml": "pmwallets: {apiKey: pmw_a_b}\nsignals:\n  orderSize: 10\n"
+    }
+  ]
 }

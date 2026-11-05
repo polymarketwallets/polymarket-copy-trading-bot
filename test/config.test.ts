@@ -52,7 +52,7 @@ describe('the shared config contract (the Python suite checks the same file)', (
     const root = new URL('../testdata/', import.meta.url);
     const c = loadConfig(new URL('config-contract.yaml', root).pathname, {});
     const expected = JSON.parse(readFileSync(new URL('config-contract.expected.json', root), 'utf8'));
-    const got = { mode: c.mode, pmwallets: { takeover: c.pmwallets.takeover }, polymarket: c.polymarket, targets: c.targets, copy: c.copy, risk: c.risk, dataDir: c.dataDir };
+    const got = { mode: c.mode, pmwallets: { takeover: c.pmwallets.takeover }, polymarket: c.polymarket, targets: c.targets, copy: c.copy, signals: c.signals, risk: c.risk, dataDir: c.dataDir };
     expect(JSON.parse(JSON.stringify(got))).toEqual(expected);
   });
 });

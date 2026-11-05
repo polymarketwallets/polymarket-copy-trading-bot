@@ -21,4 +21,16 @@ copy:
   sellMode: none
 risk:
   maxDailySpendUsdc: "500"
+signals:
+  enabled: true
+  source: mine
+  pollSec: "10"
+  orderSizeUsdc: "25"
+  minWallets: "4"
+  minTotalUsdc: "10000"
+  maxAgeSec: "90"
+  maxSlippage: "0.02"
+  maxOpenPositions: "3"
+  categories: [sports, crypto]
+  exitOnFading: "true"
 dataDir: ./contract-data

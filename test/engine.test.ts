@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Fill } from 'pmwallets';
 import { buildConfig, type Config } from '../src/config.js';
-import { CopyEngine, type Exchange } from '../src/engine.js';
+import { CopyEngine, signalTarget, type Exchange, type SignalEntry } from '../src/engine.js';
 import type { Book, Market, OrderOutcome, TradeFill } from '../src/polymarket.js';
 import { BotState, InstanceLock } from '../src/state.js';
+import { readSignals } from '../src/signals.js';
 import { toMicro } from '../src/units.js';
 
 const NOW = Date.parse('2026-09-24T12:00:00Z');
@@ -637,4 +638,130 @@ describe('InstanceLock', () => {
     writeFileSync(join(dir, 'lock.live'), JSON.stringify({ pid: 2 ** 22 + 12345, host: hostname() }));
     expect(() => new InstanceLock(dir, 'live').acquire()).not.toThrow();
   });
+});
+
+describe('signals', () => {
+  const on = (o: Record<string, unknown> = {}) => ({ signals: { enabled: true, ...o } });
+  const NOW = Date.parse('2026-09-24T12:00:00Z');
+  let k = 0;
+  const signal = (o: Partial<SignalEntry> = {}): SignalEntry => ({ id: `s${++k}`, tokenId: '1001', state: 'forming', firedAt: '2026-09-24T11:59:00.000Z', wallets: 4, usd: 9000, avgPrice: 0.5, category: 'sports', ...o });
+  const decisions = (h: ReturnType<typeof setup>) => readFileSync(join(h.dir, h.state.decisionsFile.split('/').pop()!), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { decision: string });
+  const last = (h: ReturnType<typeof setup>) => decisions(h).at(-1)!.decision;
+
+  it('buys once, in dry-run, for the signal budget, under its own target', async () => {
+    const h = setup(on({ orderSizeUsdc: 20 }));
+    const s = signal();
+    await h.engine.onSignal(s);
+    await h.engine.onSignal(s);
+    expect(decisions(h).filter((d) => d.decision === 'dry_run_buy')).toHaveLength(1);
+    expect(h.state.position(signalTarget(s.id), '1001')).toBeTruthy();
+    expect(h.ex.buys).toHaveLength(0);
+  });
+  it('sends a real order in live mode, recorded before it leaves', async () => {
+    const h = setup({ ...on(), mode: 'live', polymarket: { privateKey: `0x${'ab'.repeat(32)}`, signatureType: 0 } });
+    await h.engine.onSignal(signal());
+    expect(h.ex.buys).toHaveLength(1);
+    expect(last(h)).toBe('bought');
+  });
+  it('a second signal on a held outcome buys nothing', async () => {
+    const h = setup(on());
+    await h.engine.onSignal(signal());
+    await h.engine.onSignal(signal());
+    expect(last(h)).toBe('skipped_max_buys_per_outcome');
+  });
+  it.each([
+    ['too few wallets', { wallets: 2 }, 'skipped_signal_wallets'],
+    ['too little bought', { usd: 100 }, 'skipped_signal_total'],
+    ['already fading', { state: 'fading' }, 'skipped_signal_fading'],
+    ['too old', { firedAt: '2026-09-24T11:50:00.000Z' }, 'skipped_stale'],
+    ['no token', { tokenId: undefined }, 'skipped_invalid_token_id'],
+  ])('%s is not bought', async (_n, o, want) => {
+    const h = setup(on());
+    await h.engine.onSignal(signal(o as Partial<SignalEntry>));
+    expect(last(h)).toBe(want);
+    expect(h.state.openOutcomes()).toHaveLength(0);
+  });
+  it('categories narrow it, and empty means all', async () => {
+    const h = setup(on({ categories: ['crypto'] }));
+    await h.engine.onSignal(signal());
+    expect(last(h)).toBe('skipped_signal_category');
+  });
+  it('the daily spend cap still holds', async () => {
+    const h = setup({ ...on({ orderSizeUsdc: 50 }), risk: { maxDailySpendUsdc: 20 } });
+    await h.engine.onSignal(signal());
+    expect(last(h)).toBe('skipped_daily_spend_cap');
+  });
+  it('the price band and the depth still hold', async () => {
+    const h = setup({ ...on({ maxSlippage: 1 }), copy: { maxPrice: 0.4 } });
+    await h.engine.onSignal(signal());
+    expect(last(h)).toBe('skipped_book');
+  });
+  it('its own slippage limit is measured from the average entry', async () => {
+    const h = setup(on({ maxSlippage: 0.005 }));
+    await h.engine.onSignal(signal({ avgPrice: 0.5 }));   // the fake book asks 0.51
+    expect(last(h)).toBe('skipped_slippage');
+  });
+  it('its own position cap applies', async () => {
+    const h = setup(on({ maxOpenPositions: 1 }));
+    await h.engine.onSignal(signal());
+    await h.engine.onSignal(signal({ tokenId: '1002' }));
+    expect(last(h)).toBe('skipped_target_position_cap');
+  });
+  it('holds through fading unless asked to leave, and then leaves once', async () => {
+    const hold = setup(on());
+    const s = signal();
+    await hold.engine.onSignal(s);
+    await hold.engine.onSignal({ ...s, state: 'fading' });
+    expect(hold.state.pendingExits()).toHaveLength(0);
+    const out = setup(on({ exitOnFading: true }));
+    await out.engine.onSignal(s);
+    await out.engine.onSignal({ ...s, state: 'fading' });
+    await out.engine.onSignal({ ...s, state: 'fading' });
+    expect(decisions(out).filter((d) => d.decision === 'exit_queued')).toHaveLength(1);
+  });
+  it('the fading of another signal never sells this one', async () => {
+    const h = setup(on({ exitOnFading: true }));
+    const old = signal({ firedAt: '2026-09-24T11:00:00.000Z' });
+    await h.engine.onSignal(old);                      // too old: not bought
+    const fresh = signal();
+    await h.engine.onSignal(fresh);                    // bought, same token
+    await h.engine.onSignal({ ...old, state: 'fading' });
+    expect(h.state.pendingExits()).toHaveLength(0);
+    expect(h.state.position(signalTarget(fresh.id), '1001')).toBeTruthy();
+  });
+  it('fading while the BUY is unconfirmed queues the exit, and it survives a restart', async () => {
+    const h = setup({ ...on({ exitOnFading: true }), mode: 'live', polymarket: { privateKey: `0x${'ab'.repeat(32)}`, signatureType: 0 } });
+    h.ex.buyResult = () => ({ orderId: 'o1', status: 'unknown', shares: 0n, usdc: 0n, netShares: 0n, feeUsdc: 0n, reason: 'no answer' } as never);
+    const s = signal();
+    await h.engine.onSignal(s);
+    expect(h.state.position(signalTarget(s.id), '1001')).toBeUndefined();
+    expect(h.last().decision).toBe('buy_unconfirmed');
+    await h.engine.onSignal({ ...s, state: 'fading' });
+    expect(new BotState(h.dir, h.cfg.mode).pendingExits().map((e) => e.target)).toEqual([signalTarget(s.id)]);
+  });
+  it('slippage is measured from the low end of the rounded average', async () => {
+    const h = setup(on({ maxSlippage: 0.01 }));
+    await h.engine.onSignal(signal({ avgPrice: 0.5 }));   // asks 0.51: within 0.01 of 0.50, not of 0.495
+    expect(last(h)).toBe('skipped_slippage');
+  });
+  it('a held signal pushed off the list is still read, and its fading seen', async () => {
+    const h = setup(on({ exitOnFading: true }));
+    const s = signal();
+    await h.engine.onSignal(s);
+    expect(h.engine.heldSignals()).toEqual([s.id]);
+    const asked: Record<string, unknown>[] = [];
+    const client = { signals: async (q: Record<string, unknown>) => { asked.push(q); return { entries: q['ids'] ? [{ ...s, state: 'fading' }] : [] }; } };
+    await readSignals(client, h.engine, h.cfg.signals);
+    expect(asked[1]).toMatchObject({ ids: s.id });
+    expect(h.kinds()).toContain('exit_queued');
+    expect(h.state.position(signalTarget(s.id), '1001')).toBeUndefined();   // dry-run: the exit ran at once
+  });
+  it('without exitOnFading nothing held is read', async () => {
+    const h = setup(on());
+    await h.engine.onSignal(signal());
+    const asked: unknown[] = [];
+    await readSignals({ signals: async (q) => { asked.push(q); return { entries: [] }; } }, h.engine, h.cfg.signals);
+    expect(asked).toHaveLength(1);
+  });
+  void NOW;
 });

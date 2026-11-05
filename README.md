@@ -108,6 +108,26 @@ To move the stream to a new bot on purpose, set `pmwallets.takeover: true` on th
 replaced and stops. A bot's own reconnects after a network drop never need this. When PMWallets restarts its stream
 service the bot reconnects at once and replays anything it missed.
 
+## Follow smart-money signals (optional, off by default)
+
+On a Pro or Max account the bot can buy when a PMWallets signal fires: several tracked wallets buying the same side in a short time. Turn on `signals` in the config:
+
+```yaml
+signals:
+  enabled: true
+  source: official        # official = the PMWallets list; mine = your own rule on pmwallets.com
+  orderSizeUsdc: 10       # USDC spent on each signal
+  minWallets: 3           # skip signals backed by fewer wallets
+  minTotalUsdc: 5000      # skip signals whose wallets bought less than this in total
+  maxAgeSec: 120          # don't buy a signal older than this
+  maxSlippage: 0.05       # skip if the best ask is this far above the wallets' average entry
+  maxOpenPositions: 5     # outcomes held from signals at once
+  categories: []          # e.g. [sports, politics]; empty = all
+  exitOnFading: false     # true = sell when the wallets have sold half (seen for 6 hours after the signal); false = hold to settlement
+```
+
+**In `live` mode this places real orders.** Run it in `dry-run` first and read the decision log. `risk.maxDailySpendUsdc`, `copy.maxOpenPositions`, `copy.minPrice`/`maxPrice`, `copy.minBookDepthUsdc` and the settlement limits all still apply. A signal is handled once and an outcome is bought once. Signals are read every `pollSec` seconds, so the price may have moved.
+
 ## For AI agents and scripts
 
 Besides `run`, the bot has one-off commands that print JSON, so an AI agent (or a script) can decide and trade by

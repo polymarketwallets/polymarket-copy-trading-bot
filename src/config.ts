@@ -44,6 +44,31 @@ export interface RiskConfig {
   maxDailySpendUsdc: number;
 }
 
+/** Buying on PMWallets smart-money signals (Pro and Max plans). Off unless enabled; every risk limit of the bot still applies. */
+export interface SignalsConfig {
+  enabled: boolean;
+  /** official = the PMWallets list; mine = what your own rule on pmwallets.com fired */
+  source: 'official' | 'mine';
+  /** how often the signals are read */
+  pollSec: number;
+  /** USDC spent on each signal */
+  orderSizeUsdc: number;
+  /** skip signals backed by fewer wallets */
+  minWallets: number;
+  /** skip signals whose wallets bought less than this in total */
+  minTotalUsdc: number;
+  /** a signal older than this when the bot reads it is not bought; its time is rounded down to the minute */
+  maxAgeSec: number;
+  /** skip when the best ask is more than this above the wallets' average entry */
+  maxSlippage: number;
+  /** outcomes held from signals at once */
+  maxOpenPositions: number;
+  /** market categories to act on (sports, crypto, politics…); empty = all */
+  categories: string[];
+  /** sell when the wallets behind a signal have sold half of what they bought; false = hold to settlement */
+  exitOnFading: boolean;
+}
+
 export interface PolymarketConfig {
   clobUrl: string;
   privateKey?: string;
@@ -69,6 +94,7 @@ export interface Config {
   targets: TargetConfig[];
   copy: CopyConfig;
   risk: RiskConfig;
+  signals: SignalsConfig;
   /** directory for state and the decision log */
   dataDir: string;
 }
@@ -93,6 +119,7 @@ export const DEFAULTS: Omit<Config, 'pmwallets' | 'polymarket' | 'targets'> & { 
     sellMode: 'all',
   },
   risk: { maxDailySpendUsdc: 200 },
+  signals: { enabled: false, source: 'official', pollSec: 5, orderSizeUsdc: 10, minWallets: 3, minTotalUsdc: 5000, maxAgeSec: 120, maxSlippage: 0.05, maxOpenPositions: 5, categories: [], exitOnFading: false },
   dataDir: './pmw-data',
 };
 
@@ -123,6 +150,13 @@ function int(v: unknown, path: string, min: number, max: number): number {
   return n;
 }
 
+/** the loader's failsafe schema keeps every scalar a string, so `true` arrives as 'true' */
+function bool(v: unknown, path: string): boolean {
+  if (v === true || v === 'true') return true;
+  if (v === false || v === 'false') return false;
+  throw new Error(`${path} must be true or false`);
+}
+
 /**
  * A list option. Missing → empty list. Present but empty (`targets:` with nothing under it) is refused:
  * an empty `targets` means "copy every subscription", which is not something to arrive at by accident.
@@ -136,11 +170,12 @@ function listOf(v: unknown, path: string): unknown[] {
 /** Merge onto the defaults and validate. Fail loud on anything that would make the bot trade wrong. */
 /** every key the config may contain — anything else is a typo, and a typo must not silently become a default */
 const ALLOWED = {
-  top: ['mode', 'pmwallets', 'polymarket', 'targets', 'copy', 'risk', 'dataDir'],
+  top: ['mode', 'pmwallets', 'polymarket', 'targets', 'copy', 'risk', 'signals', 'dataDir'],
   pmwallets: ['apiKey', 'baseUrl', 'takeover'],
   polymarket: ['clobUrl', 'privateKey', 'signatureType', 'funderAddress', 'apiKey', 'apiSecret', 'apiPassphrase'],
   copy: Object.keys(DEFAULTS.copy),
   risk: Object.keys(DEFAULTS.risk),
+  signals: Object.keys(DEFAULTS.signals),
   target: ['entity', 'orderSizeUsdc', 'maxBuysPerOutcome'],
 };
 
@@ -169,6 +204,7 @@ export function buildConfig(raw: Record<string, any>): Config {
   const polyRaw = section(raw['polymarket'], 'polymarket', ALLOWED.polymarket);
   const riskRaw = section(raw['risk'], 'risk', ALLOWED.risk);
   const copy: CopyConfig = { ...DEFAULTS.copy, ...copyRaw };
+  const signals: SignalsConfig = { ...DEFAULTS.signals, ...section(raw['signals'], 'signals', ALLOWED.signals) };
   const c: Config = {
     mode: raw['mode'] ?? DEFAULTS.mode,
     pmwallets: { apiKey: pmRaw['apiKey'], baseUrl: pmRaw['baseUrl'] ?? 'https://api.pmwallets.com', takeover: 'takeover' in pmRaw ? pmRaw['takeover'] : false },
@@ -176,6 +212,7 @@ export function buildConfig(raw: Record<string, any>): Config {
     targets: listOf(raw['targets'], 'targets').map((t: unknown) => (typeof t === 'string' ? { entity: t } : t)) as TargetConfig[],
     copy,
     risk: { ...DEFAULTS.risk, ...riskRaw },
+    signals,
     dataDir: raw['dataDir'] ?? DEFAULTS.dataDir,
   };
   if (typeof c.dataDir !== 'string' || !c.dataDir.trim()) throw new Error('dataDir is empty: remove the line to use ./pmw-data, or give a directory');
@@ -210,6 +247,21 @@ export function buildConfig(raw: Record<string, any>): Config {
     throw new Error('copy.roles must be a non-empty list of taker / maker');
   }
   if (copy.sellMode !== 'all' && copy.sellMode !== 'none') throw new Error('copy.sellMode must be all or none');
+
+  signals.enabled = bool(signals.enabled, 'signals.enabled');
+  signals.exitOnFading = bool(signals.exitOnFading, 'signals.exitOnFading');
+  if (signals.source !== 'official' && signals.source !== 'mine') throw new Error('signals.source must be official or mine');
+  signals.pollSec = num(signals.pollSec, 'signals.pollSec', 3, 3600);
+  signals.orderSizeUsdc = num(signals.orderSizeUsdc, 'signals.orderSizeUsdc', 1, 1_000_000);
+  signals.minWallets = int(signals.minWallets, 'signals.minWallets', 2, 1000);
+  signals.minTotalUsdc = num(signals.minTotalUsdc, 'signals.minTotalUsdc', 0, 1_000_000_000);
+  signals.maxAgeSec = num(signals.maxAgeSec, 'signals.maxAgeSec', 60, 86_400);
+  signals.maxSlippage = num(signals.maxSlippage, 'signals.maxSlippage', 0, 1);
+  signals.maxOpenPositions = int(signals.maxOpenPositions, 'signals.maxOpenPositions', 1, 100_000);
+  signals.categories = listOf(signals.categories, 'signals.categories').map((x) => {
+    if (typeof x !== 'string' || !x.trim()) throw new Error('signals.categories must be a list of category names');
+    return x.trim();
+  });
 
   for (const [i, t] of c.targets.entries()) {
     if (t && typeof t === 'object') onlyKnown(t as unknown as Record<string, unknown>, ALLOWED.target, `targets[${i}].`);

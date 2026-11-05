@@ -99,6 +99,26 @@ support@pmwallets.com。文件里有机器人版本、`check` 结果、去掉密
 要把流有意地换给新机器人，就在新的那个上设置 `pmwallets.takeover: true` —— 旧的会收到「被接管」并停止。机器人自己网络
 闪断后的重连不需要这个设置。PMWallets 重启推送服务时，机器人会立刻重连，并补发断线期间漏掉的成交。
 
+## 跟随聪明钱信号(可选,默认关闭)
+
+Pro 或 Max 账户可以让机器人在 PMWallets 信号触发时买入:多个被跟踪的钱包在短时间内买入同一方向。在配置里打开 `signals`:
+
+```yaml
+signals:
+  enabled: true
+  source: official        # official = PMWallets 官方名单;mine = 你在 pmwallets.com 设置的规则
+  orderSizeUsdc: 10       # 每个信号买入的金额
+  minWallets: 3           # 至少几个钱包
+  minTotalUsdc: 5000      # 这些钱包合计买入至少多少
+  maxAgeSec: 120          # 超过这个时间的信号不买
+  maxSlippage: 0.05       # 盘口比钱包平均入场价高出这么多就不买
+  maxOpenPositions: 5     # 信号最多同时持有几个结果
+  categories: []          # 例如 [sports, politics];空 = 全部
+  exitOnFading: false     # true = 钱包卖出一半后退出(只在信号触发后 6 小时内判断);false = 持有到结算
+```
+
+**`live` 模式下会用真钱下单。** 先用 `dry-run` 看决策日志。`risk.maxDailySpendUsdc`、`copy.maxOpenPositions`、`copy.minPrice`/`maxPrice`、`copy.minBookDepthUsdc` 和结算时间限制都照常生效。同一个信号只处理一次,同一个结果只买一次。信号每 `pollSec` 秒读取一次,不是即时成交,价格可能已经变化。
+
 ## 给 AI agent 和脚本用
 
 除了 `run`，机器人还有一组输出 JSON 的单次命令，让 AI agent（或脚本）自己判断、自己下单——比如处理

@@ -1,16 +1,60 @@
 {
   "mode": "live",
-  "pmwallets": { "takeover": true },
-  "polymarket": { "signatureType": 2, "funderAddress": "0x1111111111111111111111111111111111111111", "privateKey": "0xabababababababababababababababababababababababababababababababab", "clobUrl": "https://clob.polymarket.com" },
+  "pmwallets": {
+    "takeover": true
+  },
+  "polymarket": {
+    "signatureType": 2,
+    "funderAddress": "0x1111111111111111111111111111111111111111",
+    "privateKey": "0xabababababababababababababababababababababababababababababababab",
+    "clobUrl": "https://clob.polymarket.com"
+  },
   "targets": [
-    { "entity": "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" },
-    { "entity": "7KQ2MF9X4B1C", "orderSizeUsdc": 12.5, "maxBuysPerOutcome": 2 }
+    {
+      "entity": "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+    },
+    {
+      "entity": "7KQ2MF9X4B1C",
+      "orderSizeUsdc": 12.5,
+      "maxBuysPerOutcome": 2
+    }
   ],
   "copy": {
-    "orderSizeUsdc": 20, "roles": ["taker"], "maxBuysPerOutcome": 3, "maxOpenPositions": 20, "maxOpenPositionsPerTarget": 5,
-    "maxFillAgeSec": 90, "minTargetNotionalUsdc": 25, "minPrice": 0.1, "maxPrice": 0.9, "maxSlippage": 0.03,
-    "minBookDepthUsdc": 50, "minSecondsToEndDate": 60, "maxSecondsToEndDate": 0, "sellMode": "none"
+    "orderSizeUsdc": 20,
+    "roles": [
+      "taker"
+    ],
+    "maxBuysPerOutcome": 3,
+    "maxOpenPositions": 20,
+    "maxOpenPositionsPerTarget": 5,
+    "maxFillAgeSec": 90,
+    "minTargetNotionalUsdc": 25,
+    "minPrice": 0.1,
+    "maxPrice": 0.9,
+    "maxSlippage": 0.03,
+    "minBookDepthUsdc": 50,
+    "minSecondsToEndDate": 60,
+    "maxSecondsToEndDate": 0,
+    "sellMode": "none"
   },
-  "risk": { "maxDailySpendUsdc": 500 },
+  "risk": {
+    "maxDailySpendUsdc": 500
+  },
+  "signals": {
+    "enabled": true,
+    "source": "mine",
+    "pollSec": 10,
+    "orderSizeUsdc": 25,
+    "minWallets": 4,
+    "minTotalUsdc": 10000,
+    "maxAgeSec": 90,
+    "maxSlippage": 0.02,
+    "maxOpenPositions": 3,
+    "categories": [
+      "sports",
+      "crypto"
+    ],
+    "exitOnFading": true
+  },
   "dataDir": "./contract-data"
 }

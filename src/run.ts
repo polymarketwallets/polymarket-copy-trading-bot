@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { FileStateStore, FillStream, PmwClient, PmwError, type StreamEvent } from 'pmwallets';
 import type { Config, TargetConfig } from './config.js';
 import { CopyEngine } from './engine.js';
+import { readSignals } from './signals.js';
 import type { Logger } from './log.js';
 import { PolymarketGateway } from './polymarket.js';
 import { checkFunder } from './wallets.js';
@@ -118,6 +119,24 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     setInterval(() => { job().catch((e: unknown) => log.error(`${name} failed; will run again`, { error: (e as Error).message })); }, ms);
   const sweep = every(10 * 60_000, 'settlement sweep', () => engine.sweepSettled());
   const ticker = every(15_000, 'pending-work tick', () => engine.tick());
+  /*
+   * Signals are read, not streamed: a list that survives a reconnect, and a signal that matters stays on it. Oldest
+   * first, one round at a time. A plan without signals is said once and the reading stops.
+   */
+  let reading = false;
+  const signalTimer = cfg.signals.enabled ? setInterval(() => {
+    if (reading) return;
+    reading = true;
+    readSignals(client as never, engine, cfg.signals)
+      .catch((e: unknown) => {
+        if (e instanceof PmwError && e.status === 403) {
+          log.error('signals are part of the Pro and Max plans: this account has neither, so the bot does not act on them');
+          clearInterval(signalTimer);
+        } else log.warn('could not read signals; trying again', { error: (e as Error).message });
+      })
+      .finally(() => { reading = false; });
+  }, cfg.signals.pollSec * 1000) : undefined;
+  if (cfg.signals.enabled) log.info('acting on signals', { source: cfg.signals.source, orderSizeUsdc: cfg.signals.orderSizeUsdc, minWallets: cfg.signals.minWallets });
   await stream.start();
 
   let stopping = false;
@@ -127,6 +146,7 @@ export async function run(cfg: Config, log: Logger): Promise<void> {
     log.info('stopping…');
     clearInterval(sweep);
     clearInterval(ticker);
+    clearInterval(signalTimer);
     await stream.stop();
     lock.release();
     process.exit(code);
